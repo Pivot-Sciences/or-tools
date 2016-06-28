@@ -598,6 +598,40 @@ class NodePairSwapActiveOperator : public PathWithPreviousNodesOperator {
   std::vector<int> pairs_;
 };
 
+
+// Operator which handles ndd constraints
+class NDDNodeSwapActiveOperator : public PathWithPreviousNodesOperator {
+public:
+	NDDNodeSwapActiveOperator(
+		const std::vector<IntVar*>& vars, const std::vector<IntVar*>& secondary_vars,
+		ResultCallback1<int, int64>* start_empty_path_class,
+		const RoutingModel::NodePairs& node_pairs)
+		: PathWithPreviousNodesOperator(vars, secondary_vars, 1,
+		start_empty_path_class),
+		inactive_node_(0) {
+		int64 max_pair_index = -1;
+		for (const std::pair<int64, int64>& node_pair : node_pairs) {
+			max_pair_index = std::max(max_pair_index, node_pair.first);
+			max_pair_index = std::max(max_pair_index, node_pair.second);
+		}
+		pairs_.resize(max_pair_index + 1, -1);
+		for (const std::pair<int64, int64>& node_pair : node_pairs) {
+			pairs_[node_pair.first] = node_pair.second;
+			pairs_[node_pair.second] = node_pair.first;
+		}
+	}
+	~NDDNodeSwapActiveOperator() override {}
+	std::string DebugString() const override { return "NDDNodeSwapActiveOperator"; }
+	bool MakeNextNeighbor(Assignment* delta, Assignment* deltadelta) override;
+	bool MakeNeighbor() override;
+
+private:
+	void OnNodeInitialization() override;
+
+	int inactive_node_;
+	std::vector<int> pairs_;
+};
+
 void NodePairSwapActiveOperator::OnNodeInitialization() {
   PathWithPreviousNodesOperator::OnNodeInitialization();
   for (int i = 0; i < Size(); ++i) {
@@ -643,6 +677,51 @@ LocalSearchOperator* NodePairSwapActive(
     const RoutingModel::NodePairs& pairs) {
   return solver->RevAlloc(new NodePairSwapActiveOperator(
       vars, secondary_vars, start_empty_path_class, pairs));
+}
+
+void NDDNodeSwapActiveOperator::OnNodeInitialization() {
+	PathWithPreviousNodesOperator::OnNodeInitialization();
+	for (int i = 0; i < Size(); ++i) {
+		if (IsInactive(i) && i < pairs_.size() && pairs_[i] == -1) {
+			inactive_node_ = i;
+			return;
+		}
+	}
+	inactive_node_ = Size();
+}
+
+bool NDDNodeSwapActiveOperator::MakeNeighbor() {
+	const int64 base = BaseNode(0);
+	if (IsPathEnd(base)) {
+		return false;
+	}
+	const int64 next = Next(base);
+	if (next < pairs_.size() && pairs_[next] != -1) {
+		return MakeChainInactive(Prev(pairs_[next]), pairs_[next]) && MakeChainInactive(base, next) && MakeActive(inactive_node_, base);
+	}
+	return false;
+}
+
+
+bool NDDNodeSwapActiveOperator::MakeNextNeighbor(Assignment* delta,
+	Assignment* deltadelta) {
+	while (inactive_node_ < Size()) {
+		if (!IsInactive(inactive_node_) ||
+			!PathOperator::MakeNextNeighbor(delta, deltadelta)) {
+			ResetPosition();
+			++inactive_node_;
+		}
+		else {
+			return true;
+		}
+	}
+	return false;
+}
+
+LocalSearchOperator* NDDSwapOperator(Solver* const solver, const std::vector<IntVar*>& vars,
+	const std::vector<IntVar*>& secondary_vars, ResultCallback1<int, int64>* start_empty_path_class,
+	const RoutingModel::NodePairs& pairs) {
+	return solver->RevAlloc(new NDDNodeSwapActiveOperator(vars, secondary_vars, start_empty_path_class, pairs));
 }
 
 // Operator which inserts pairs of inactive nodes into a path and makes an
@@ -4080,6 +4159,9 @@ void RoutingModel::CreateNeighborhoodOperators() {
   CP_ROUTING_ADD_OPERATOR(PATH_LNS, PATHLNS);
   CP_ROUTING_ADD_OPERATOR(FULL_PATH_LNS, FULLPATHLNS);
   CP_ROUTING_ADD_OPERATOR(INACTIVE_LNS, UNACTIVELNS);
+  local_search_operators_[NDD_LNS] = NDDSwapOperator(solver_.get(), nexts_,
+	  CostsAreHomogeneousAcrossVehicles() ? empty : vehicle_vars_,
+	  vehicle_start_class_callback_.get(), pickup_delivery_pairs_);
 }
 
 #undef CP_ROUTING_ADD_CALLBACK_OPERATOR

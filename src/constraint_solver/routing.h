@@ -1016,7 +1016,8 @@ class RoutingModel {
     FULL_PATH_LNS,
     TSP_LNS,
     INACTIVE_LNS,
-    LOCAL_SEARCH_OPERATOR_COUNTER
+	NDD_LNS,
+	LOCAL_SEARCH_OPERATOR_COUNTER
   };
 
   // Structure storing a value for a set of nodes. Is used to store for node
