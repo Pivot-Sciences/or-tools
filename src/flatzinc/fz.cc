@@ -67,9 +67,12 @@ DEFINE_bool(verbose_mt, false, "Verbose Multi-Thread.");
 DEFINE_bool(use_fz_sat, false, "Use the SAT/CP solver.");
 DEFINE_string(fz_model_name, "stdin",
               "Define problem name when reading from stdin.");
+DEFINE_string(file_prefix, "", "The file prefix for this sub problem being solved.");
+DEFINE_int32(objective_norm, -1, "The target objective value for this problem - on which we will normalise.");
 
 DECLARE_bool(log_prefix);
 DECLARE_bool(fz_use_sat);
+
 
 using operations_research::ThreadPool;
 
