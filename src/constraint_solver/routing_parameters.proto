@@ -204,6 +204,10 @@ message RoutingSearchParameters {
     // consecutive arcs. That way the path can be improved by inserting inactive
     // nodes or swaping arcs.
     bool use_inactive_lns = 19;
+
+	// Operator which look at the NDD constraint between nodes to attempt to inject them into the sequence.
+	bool use_ndd_swap = 21;
+	
   }
   LocalSearchNeighborhoodOperators local_search_operators = 3;
 

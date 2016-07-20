@@ -359,7 +359,7 @@ LocalSearchOperator* MakeRelocateNeighbors(
 // Pair-based neighborhood operators, designed to move nodes by pairs (pairs
 // are static and given). These neighborhoods are very useful for Pickup and
 // Delivery problems where pickup and delivery nodes must remain on the same
-// route.
+// route.bool MakeNextNeighbor(Assignment* delta, Assignment* deltadelta)
 // TODO(user): Add option to prune neighbords where the order of node pairs
 //                is violated (ie precedence between pickup and delivery nodes).
 // TODO(user): Move this to local_search.cc if it's generic enough.
@@ -599,39 +599,6 @@ class NodePairSwapActiveOperator : public PathWithPreviousNodesOperator {
 };
 
 
-// Operator which handles ndd constraints
-class NDDNodeSwapActiveOperator : public PathWithPreviousNodesOperator {
-public:
-	NDDNodeSwapActiveOperator(
-		const std::vector<IntVar*>& vars, const std::vector<IntVar*>& secondary_vars,
-		ResultCallback1<int, int64>* start_empty_path_class,
-		const RoutingModel::NodePairs& node_pairs)
-		: PathWithPreviousNodesOperator(vars, secondary_vars, 1,
-		start_empty_path_class),
-		inactive_node_(0) {
-		int64 max_pair_index = -1;
-		for (const std::pair<int64, int64>& node_pair : node_pairs) {
-			max_pair_index = std::max(max_pair_index, node_pair.first);
-			max_pair_index = std::max(max_pair_index, node_pair.second);
-		}
-		pairs_.resize(max_pair_index + 1, -1);
-		for (const std::pair<int64, int64>& node_pair : node_pairs) {
-			pairs_[node_pair.first] = node_pair.second;
-			pairs_[node_pair.second] = node_pair.first;
-		}
-	}
-	~NDDNodeSwapActiveOperator() override {}
-	std::string DebugString() const override { return "NDDNodeSwapActiveOperator"; }
-	bool MakeNextNeighbor(Assignment* delta, Assignment* deltadelta) override;
-	bool MakeNeighbor() override;
-
-private:
-	void OnNodeInitialization() override;
-
-	int inactive_node_;
-	std::vector<int> pairs_;
-};
-
 void NodePairSwapActiveOperator::OnNodeInitialization() {
   PathWithPreviousNodesOperator::OnNodeInitialization();
   for (int i = 0; i < Size(); ++i) {
@@ -670,59 +637,131 @@ bool NodePairSwapActiveOperator::MakeNeighbor() {
   return false;
 }
 
-LocalSearchOperator* NodePairSwapActive(
-    Solver* const solver, const std::vector<IntVar*>& vars,
-    const std::vector<IntVar*>& secondary_vars,
-    ResultCallback1<int, int64>* start_empty_path_class,
-    const RoutingModel::NodePairs& pairs) {
-  return solver->RevAlloc(new NodePairSwapActiveOperator(
-      vars, secondary_vars, start_empty_path_class, pairs));
+LocalSearchOperator* NodePairSwapActive(Solver* const solver, const std::vector<IntVar*>& vars, const std::vector<IntVar*>& secondary_vars,
+    ResultCallback1<int, int64>* start_empty_path_class, const RoutingModel::NodePairs& pairs) {
+  return solver->RevAlloc(new NodePairSwapActiveOperator(vars, secondary_vars, start_empty_path_class, pairs));
 }
 
-void NDDNodeSwapActiveOperator::OnNodeInitialization() {
-	PathWithPreviousNodesOperator::OnNodeInitialization();
-	for (int i = 0; i < Size(); ++i) {
-		if (IsInactive(i) && i < pairs_.size() && pairs_[i] == -1) {
-			inactive_node_ = i;
-			return;
+
+
+class NDDLNS : public IntVarLocalSearchOperator {
+public:
+	NDDLNS(Solver* const solver, const std::vector<IntVar*>& vars, const std::vector<IntVar*>& secondary_vars,
+		ResultCallback1<int, int64>* start_empty_path_class, const RoutingModel::NDDAssignments& pairs)
+		: IntVarLocalSearchOperator(vars), rand_(123), number_of_variables_(vars.size()), nddPairs_(pairs), nexts_(vars),
+		vehicleVars_(secondary_vars), active_pair_(0), active_tuple_(0){
+		CHECK_GT(number_of_variables_, 0);
+		CHECK_LE(number_of_variables_, Size());
+		//we are going to re-add everything wrt all the variable
+		std::vector<IntVar*> allvars;
+		for (int i = 0; i < vars.size(); i++){
+			allvars.push_back(vars[i]);
 		}
+		for (int i = 0; i < secondary_vars.size(); i++){
+			allvars.push_back(secondary_vars[i]);
+		}
+		vars_.clear();
+		AddVars(allvars);
 	}
-	inactive_node_ = Size();
-}
+	~NDDLNS() override {}
+	//bool MakeNextNeighbor(Assignment* delta, Assignment* deltadelta) override;
 
-bool NDDNodeSwapActiveOperator::MakeNeighbor() {
-	const int64 base = BaseNode(0);
-	if (IsPathEnd(base)) {
+	std::string DebugString() const override { return "NDD_lns"; }
+
+	bool MakeNextNeighbor(Assignment* delta, Assignment* deltadelta) {
+		CHECK(delta != nullptr);
+		while (true) {
+			RevertChanges(true);
+
+			if (!MakeOneNeighbor()) {
+				return false;
+			}
+
+			if (ApplyChanges(delta, deltadelta)) {
+				VLOG(2) << "Delta (" << DebugString() << ") = " << delta->DebugString();
+				return true;
+			}
+		}
 		return false;
 	}
-	const int64 next = Next(base);
-	if (next < pairs_.size() && pairs_[next] != -1) {
-		return MakeChainInactive(Prev(pairs_[next]), pairs_[next]) && MakeChainInactive(base, next) && MakeActive(inactive_node_, base);
-	}
-	return false;
-}
+
+	//bool MakeNextNeighbor(Assignment* delta, Assignment* deltadelta){
+
+	//	for (int i = active_pair_; i < nddPairs_.size(); i++)
+	//	{
+	//		//so what are we actually doing here?
+	//		for (int j = active_tuple_; j < nddPairs_[i].allowablesssignments.size(); j++){
+	//			active_tuple_++;
+	//			return true;
+	//		}
+	//		active_pair_++;
+	//		return true;
+	//	}
+	//	return false; //we need a terminating criterion once we've traversed the whole neighborhood.
+	//	throw;
+	//}
 
 
-bool NDDNodeSwapActiveOperator::MakeNextNeighbor(Assignment* delta,
-	Assignment* deltadelta) {
-	while (inactive_node_ < Size()) {
-		if (!IsInactive(inactive_node_) ||
-			!PathOperator::MakeNextNeighbor(delta, deltadelta)) {
-			ResetPosition();
-			++inactive_node_;
-		}
-		else {
+	bool MakeOneNeighbor(){
+		//this is cool. so basically, we're going to try some percentage of the possible search space - for now we can do a complete enumeration.
+		//but ultimately, ndd's are too complex to try them all.
+
+		//the purpose here is to set the values of the variables in the neighborhood so that they can be evaluated outside of this function by the main solver (for min cost)
+		//this may require actually finding the new insertion points etc.
+
+		if (active_tuple_ < nddPairs_[active_pair_].allowablesssignments.size()){
+			if (values_[4] != 4)
+				return false;
+
+			for (int i = 0; i < nddPairs_[active_pair_].allowablesssignments[active_tuple_].size(); i++){
+				//we're going to brute force a lookup here so that we can test it nicely.
+				int vindex = -1;
+				for (int j = 0; j < vars_.size(); j++){
+					if (vars_[j] == nddPairs_[active_pair_].vehiclevars[i]){
+						vindex = j;
+						break;
+					}
+				}
+				SetValue(vindex, nddPairs_[active_pair_].allowablesssignments[active_tuple_][i]);
+				//lets see if this is a good enough start.
+				//turns out its not enough. Could be because we haven't simultaneously set the Next() variable to point to this particular stop
+				//So we've moved it to a new vehicle, we should do an incremental insertion, but for now lets set it manually just to be between
+				//the depot and this stop we've tried to inject
+				if (i == 0){
+					int nnext = values_[10];
+					SetValue(4, nnext);
+					//SetValue(4 + 10, vindex); //to update the path allocated to this variable?
+					SetValue(10, 4); //should still be on the same path.
+					//SetValue(4 + 10, vindex);
+				}
+				else{
+					int nnext = values_[11];
+					SetValue(5, nnext);
+					//SetValue(5 + 10, vindex); //to update the path allocated to this variable?
+					SetValue(11, 5);
+				}
+			}
+			active_tuple_++;
 			return true;
 		}
-	}
-	return false;
-}
+		else{
+			return false;
+		}
 
-LocalSearchOperator* NDDSwapOperator(Solver* const solver, const std::vector<IntVar*>& vars,
-	const std::vector<IntVar*>& secondary_vars, ResultCallback1<int, int64>* start_empty_path_class,
-	const RoutingModel::NodePairs& pairs) {
-	return solver->RevAlloc(new NDDNodeSwapActiveOperator(vars, secondary_vars, start_empty_path_class, pairs));
-}
+		throw;
+	}
+
+
+private:
+	ACMRandom rand_;
+	const int number_of_variables_;
+	std::vector<IntVar*> vehicleVars_;
+	std::vector<IntVar*> nexts_;
+	RoutingModel::NDDAssignments nddPairs_;
+	int active_pair_;
+	int active_tuple_;
+
+};
 
 // Operator which inserts pairs of inactive nodes into a path and makes an
 // active node inactive.
@@ -1233,6 +1272,7 @@ RoutingSearchParameters RoutingModel::DefaultSearchParameters() {
       "  use_full_path_lns: false"
       "  use_tsp_lns: false"
       "  use_inactive_lns: false"
+	  "  use_ndd_swap: true"
       "}"
       "local_search_metaheuristic: AUTOMATIC "
       "guided_local_search_lambda_coefficient: 0.1 "
@@ -3206,12 +3246,9 @@ const Assignment* RoutingModel::SolveFromAssignmentWithParameters(
   if (status_ == ROUTING_INVALID) {
     return nullptr;
   }
-  solver_->UpdateLimits(parameters.time_limit_ms(), kint64max, kint64max,
-                        parameters.solution_limit(), limit_);
-  solver_->UpdateLimits(parameters.time_limit_ms(), kint64max, kint64max, 1,
-                        ls_limit_);
-  solver_->UpdateLimits(parameters.lns_time_limit_ms(), kint64max, kint64max,
-                        kint64max, lns_limit_);
+  solver_->UpdateLimits(parameters.time_limit_ms(), kint64max, kint64max, parameters.solution_limit(), limit_);
+  solver_->UpdateLimits(parameters.time_limit_ms(), kint64max, kint64max, 1, ls_limit_);
+  solver_->UpdateLimits(parameters.lns_time_limit_ms(), kint64max, kint64max, kint64max, lns_limit_);
   const int64 start_time_ms = solver_->wall_time();
   if (nullptr == assignment) {
     solver_->Solve(solve_db_, monitors_);
@@ -4159,9 +4196,7 @@ void RoutingModel::CreateNeighborhoodOperators() {
   CP_ROUTING_ADD_OPERATOR(PATH_LNS, PATHLNS);
   CP_ROUTING_ADD_OPERATOR(FULL_PATH_LNS, FULLPATHLNS);
   CP_ROUTING_ADD_OPERATOR(INACTIVE_LNS, UNACTIVELNS);
-  local_search_operators_[NDD_LNS] = NDDSwapOperator(solver_.get(), nexts_,
-	  CostsAreHomogeneousAcrossVehicles() ? empty : vehicle_vars_,
-	  vehicle_start_class_callback_.get(), pickup_delivery_pairs_);
+  local_search_operators_[NDD_LNS] = new NDDLNS(solver_.get(), nexts_, vehicle_vars_, vehicle_start_class_callback_.get(), ndd_assignments_);
 }
 
 #undef CP_ROUTING_ADD_CALLBACK_OPERATOR
@@ -4179,7 +4214,11 @@ LocalSearchOperator* RoutingModel::GetNeighborhoodOperators(
   if (pickup_delivery_pairs_.size() > 0) {
     CP_ROUTING_PUSH_OPERATOR(RELOCATE_PAIR, relocate_pair, operators);
     CP_ROUTING_PUSH_OPERATOR(NODE_PAIR_SWAP, node_pair_swap_active, operators);
+	
   }
+	if (ndd_constraints_active){
+		CP_ROUTING_PUSH_OPERATOR(NDD_LNS, ndd_swap, operators);
+	}
   if (vehicles_ > 1) {
     CP_ROUTING_PUSH_OPERATOR(RELOCATE, relocate, operators);
     CP_ROUTING_PUSH_OPERATOR(EXCHANGE, exchange, operators);
@@ -4570,6 +4609,13 @@ DecisionBuilder* RoutingModel::CreateLocalSearchDecisionBuilder(
     for (int i = size; i < all_size; ++i) {
       all_vars[i] = vehicle_vars_[i - size];
     }
+		//if (ndd_constraints_active){
+		//	for (int i = 0; i < ndd_assignments_.size(); i++){
+		//		//I had this thought that we can perhaps add this to the local search operator here
+		//		//but it turns out that the tuple formulation is a serious problem because there isn't a variable that represents the selected tuple index
+		//		//all_vars.push_back(ndd_assignments_[i].Target);
+		//	}
+		//}
     return solver_->MakeLocalSearchPhase(all_vars, first_solution, parameters);
   }
 }

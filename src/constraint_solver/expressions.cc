@@ -1661,7 +1661,9 @@ class SimpleBitSet : public DomainIntVar::BitSet {
         omin_;
     const uint64 removed_bits =
         BitCountRange64(bits_, cmin - omin_, new_min - omin_ - 1);
+
     size_.Add(solver_, -removed_bits);
+
     return new_min;
   }
 

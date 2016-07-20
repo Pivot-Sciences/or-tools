@@ -186,9 +186,10 @@ class Set {
     DCHECK(Contains(n)) << "n = " << n << ", value_ = " << value_;
     return SingletonRank(Singleton(n));
   }
-
   // Returns the set consisting of the smallest element of the calling object.
+
   Set SmallestSingleton() const { return Set(value_ & -value_); }
+
 
   // Returns the rank of the singleton's element in the calling Set.
   int SingletonRank(Set singleton) const {

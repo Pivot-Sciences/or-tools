@@ -882,6 +882,26 @@ class RoutingModel {
   // constraints and/or modify search algoithms.
   Solver* solver() const { return solver_.get(); }
 
+
+	struct NDDAssignment {
+		std::vector<IntVar*> vehiclevars;
+		std::vector<std::vector<int64>> allowablesssignments;
+		std::vector<int64> affectedNodes;
+	};
+
+	typedef std::vector<NDDAssignment> NDDAssignments;
+
+	NDDAssignments ndd_assignments_;
+
+	void AddNDDConstraintSet(std::vector<IntVar*> vehicleVars, std::vector<std::vector<int64>> allowableAssignments, std::vector<int64> affectedNodes){
+		ndd_constraints_active = true;
+		NDDAssignment a;
+		a.allowablesssignments = allowableAssignments;
+		a.vehiclevars = vehicleVars;
+		a.affectedNodes = affectedNodes;
+		ndd_assignments_.push_back(a);
+	}
+
   // Sizes and indices
   // Returns the number of nodes in the model.
   int nodes() const { return nodes_; }
@@ -1203,6 +1223,9 @@ class RoutingModel {
   std::vector<ValuedNodes> same_vehicle_costs_;
   // Pickup and delivery
   NodePairs pickup_delivery_pairs_;
+
+	///whether there are ndd constraints that are active or not.
+	bool ndd_constraints_active = false;
   // Index management
   std::vector<NodeIndex> index_to_node_;
   ITIVector<NodeIndex, int> node_to_index_;

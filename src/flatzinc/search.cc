@@ -23,9 +23,11 @@
 #include "flatzinc/model.h"
 #include "flatzinc/search.h"
 #include "flatzinc/solver.h"
+#include "redis_logger.h"
 
 DECLARE_bool(fz_logging);
 DECLARE_bool(fz_verbose);
+DECLARE_string(file_prefix);
 
 namespace operations_research {
 extern std::string DefaultPhaseStatString(DecisionBuilder* db);
@@ -784,6 +786,33 @@ void FzSolver::Solve(FzSolverParameters p,
         solver()->demon_runs(Solver::DELAYED_PRIORITY), FzMemoryUsage().c_str(),
         search_name_.c_str()));
     parallel_support->FinalOutput(p.worker_id, final_output);
+	
+	reporting::CPRunStat runstat;
+	runstat.TimeCreated = std::time(nullptr);
+	runstat.MinDomainSize = 0;
+	runstat.MaxDomainSize = 0;
+	runstat.NumberOfVariables = 0;
+
+	runstat.Branches = solver()->branches();
+	runstat.BuildTime = build_time;
+	runstat.SolveTime = solve_time;
+	runstat.NormalPropagations = solver()->demon_runs(Solver::NORMAL_PRIORITY);
+	runstat.DelayedPropagations = solver()->demon_runs(Solver::DELAYED_PRIORITY);
+	runstat.MemoryUsage = FzMemoryUsage().c_str();
+	runstat.NumberOfConstraints = solver()->constraints();
+	runstat.MaxFeasibility = -1;
+	runstat.NumberOfSolutions = num_solutions;
+
+	runstat.BestSolution = best;
+	runstat.AverageSearchDepth = -1;
+	runstat.GPObjective = 0;
+
+	std::string str(FLAGS_file_prefix);
+	runstat.upid = str;
+	runstat.SolveStatus = status_string;
+
+	logToRedis("__FZRunStat__", runstat);
+
   }
 }
 }  // namespace operations_research
