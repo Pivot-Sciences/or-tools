@@ -50,6 +50,8 @@ DEFINE_bool(verbose_impact, false, "Verbose impact");
 DEFINE_bool(verbose_mt, false, "Verbose Multi-Thread");
 DEFINE_bool(presolve, true, "Use presolve.");
 DEFINE_bool(read_from_stdin, false, "Read the FlatZinc from stdin, not from a file");
+DEFINE_string(file_prefix, "", "The file suffix to add to the output objective");
+DEFINE_int32(objective_norm, -1, "The objective normalisation term");
 
 DECLARE_bool(fz_logging);
 DECLARE_bool(log_prefix);
@@ -82,8 +84,7 @@ void SequentialRun(const FzModel* model) {
   parameters.use_log = FLAGS_fz_logging;
   parameters.verbose_impact = FLAGS_verbose_impact;
   parameters.worker_id = -1;
-  parameters.search_type =
-      FLAGS_use_impact ? FzSolverParameters::IBS : FzSolverParameters::DEFAULT;
+  parameters.search_type = FLAGS_use_impact ? FzSolverParameters::IBS : FzSolverParameters::DEFAULT;
 
   std::unique_ptr<FzParallelSupportInterface> parallel_support(
       MakeSequentialSupport(FLAGS_all, FLAGS_num_solutions));
@@ -259,6 +260,7 @@ void ParseAndRun(const std::string& input, int num_workers, bool input_is_filena
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
+
   operations_research::FixAndParseParameters(&argc, &argv);
   if (FLAGS_read_from_stdin) { // allow users to pipe in the FlatZinc via stdin
     std::string inputText = "";
