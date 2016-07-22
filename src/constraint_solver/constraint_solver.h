@@ -559,6 +559,7 @@ class Solver {
     // Then y is relaxed, and the solver is looking for a new solution.
     // If a new solution is found, then the next variable to be relaxed is x.
     SIMPLELNS
+
   };
 
   // This enum is used in Solver::MakeOperator associated with an evaluator

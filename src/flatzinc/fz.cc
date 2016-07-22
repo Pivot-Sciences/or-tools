@@ -50,12 +50,13 @@ DEFINE_bool(verbose_impact, false, "Verbose impact");
 DEFINE_bool(verbose_mt, false, "Verbose Multi-Thread");
 DEFINE_bool(presolve, true, "Use presolve.");
 DEFINE_bool(read_from_stdin, false, "Read the FlatZinc from stdin, not from a file");
-DEFINE_string(file_prefix, "", "The file suffix to add to the output objective");
-DEFINE_int32(objective_norm, -1, "The objective normalisation term");
+DEFINE_string(file_prefix, "", "The file prefix for this sub problem being solved.");
+DEFINE_int32(objective_norm, -1, "The target objective value for this problem - on which we will normalise.");
 
 DECLARE_bool(fz_logging);
 DECLARE_bool(log_prefix);
 DECLARE_bool(use_sat);
+
 
 using operations_research::ThreadPool;
 extern void interrupt_handler(int s);
