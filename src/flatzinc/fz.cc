@@ -69,6 +69,8 @@ DEFINE_string(fz_model_name, "stdin",
               "Define problem name when reading from stdin.");
 DEFINE_string(file_prefix, "", "The file prefix for this sub problem being solved.");
 DEFINE_int32(objective_norm, -1, "The target objective value for this problem - on which we will normalise.");
+DEFINE_string(file_prefix, "", "The file suffix to add to the output objective");
+DEFINE_int32(objective_norm, -1, "The objective normalisation term");
 
 DECLARE_bool(log_prefix);
 DECLARE_bool(fz_use_sat);
@@ -106,6 +108,11 @@ FlatzincParameters SingleThreadParameters() {
   parameters.time_limit_in_ms = FLAGS_time_limit;
   parameters.verbose_impact = FLAGS_verbose_impact;
   return parameters;
+  parameters.search_type = FLAGS_use_impact ? FzSolverParameters::IBS : FzSolverParameters::DEFAULT;
+
+  std::unique_ptr<FzParallelSupportInterface> parallel_support(
+      MakeSequentialSupport(FLAGS_all, FLAGS_num_solutions));
+  Solve(model, parameters, parallel_support.get());
 }
 
 FlatzincParameters MultiThreadParameters(int thread_id) {
@@ -292,15 +299,13 @@ void Solve(const Model& model) {
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
-  // Flatzinc specifications require single dash parameters (-a, -f, -p).
-  // We need to fix parameters before parsing them.
-  operations_research::fz::FixAndParseParameters(&argc, &argv);
-  // We allow piping model through stdin.
-  std::string input;
-  if (FLAGS_read_from_stdin) {
+
+  operations_research::FixAndParseParameters(&argc, &argv);
+  if (FLAGS_read_from_stdin) { // allow users to pipe in the FlatZinc via stdin
+    std::string inputText = "";
     std::string currentLine;
     while (std::getline(std::cin, currentLine)) {
-      input.append(currentLine);
+      inputText.append(currentLine);
     }
   } else {
     if (argc <= 1) {
