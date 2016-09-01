@@ -411,7 +411,7 @@ bool Presolver::Unreify(Constraint* ct, std::string* log) {
     ct->arguments.pop_back();
   } else if (ct->type == "set_in" || ct->type == "set_not_in") {
     // Rule 2.
-    log->append("unreify and reverse set constraint");
+    FZVLOG << "Unreify and inverse " << ct->DebugString() << FZENDL;
     ct->RemoveTargetVariable();
     ct->arguments.pop_back();
     ct->type.resize(ct->type.size() - 2);
@@ -1849,18 +1849,19 @@ bool Presolver::PropagateReifiedComparisons(Constraint* ct, std::string* log) {
       if (value == 0) {
         parity = !parity;
       }
-      log->append("simplify constraint");
-      Argument target = ct->arguments[2];
+      FZVLOG << "Simplify " << ct->DebugString() << FZENDL;
+      FzArgument target = ct->Arg(2);
       ct->arguments.clear();
-      ct->arguments.push_back(Argument::IntVarRef(var));
+      ct->arguments.push_back(FzArgument::IntVarRef(var));
       ct->arguments.push_back(target);
       ct->type = parity ? "bool_eq" : "bool_not";
+      FZVLOG << "  - into " << ct->DebugString() << FZENDL;
     } else {
       // Rule 3.
       int state = 2;  // 0 force_false, 1 force true, 2 unknown.
       if (id == "int_eq_reif" || id == "bool_eq_reif") {
         if (var->domain.Contains(value)) {
-          if (var->domain.HasOneValue()) {
+          if (var->HasOneValue()) {
             state = 1;
           }
         } else {
@@ -1868,100 +1869,52 @@ bool Presolver::PropagateReifiedComparisons(Constraint* ct, std::string* log) {
         }
       } else if (id == "int_ne_reif" || id == "bool_ne_reif") {
         if (var->domain.Contains(value)) {
-          if (var->domain.HasOneValue()) {
+          if (var->HasOneValue()) {
             state = 0;
           }
         } else {
           state = 1;
         }
       } else if ((((id == "int_lt_reif" || id == "bool_lt_reif") && reverse) ||
-                  ((id == "int_gt_reif" || id == "bool_gt_reif") &&
-                   !reverse)) &&
-                 !var->domain.IsAllInt64()) {  // int_gt
-        if (var->domain.Min() > value) {
+                  ((id == "int_gt_reif" || id == "bool_gt_reif") && !reverse)) &&
+                 !var->IsAllInt64()) {  // int_gt
+        if (var->Min() > value) {
           state = 1;
-        } else if (var->domain.Max() <= value) {
+        } else if (var->Max() <= value) {
           state = 0;
         }
       } else if ((((id == "int_lt_reif" || id == "bool_lt_reif") && !reverse) ||
                   ((id == "int_gt_reif" || id == "bool_gt_reif") && reverse)) &&
-                 !var->domain.IsAllInt64()) {  // int_lt
-        if (var->domain.Max() < value) {
+                 !var->IsAllInt64()) {  // int_lt
+        if (var->Max() < value) {
           state = 1;
-        } else if (var->domain.Min() >= value) {
+        } else if (var->Min() >= value) {
           state = 0;
         }
       } else if ((((id == "int_le_reif" || id == "bool_le_reif") && reverse) ||
-                  ((id == "int_ge_reif" || id == "bool_ge_reif") &&
-                   !reverse)) &&
-                 !var->domain.IsAllInt64()) {  // int_ge
-        if (var->domain.Min() >= value) {
+                  ((id == "int_ge_reif" || id == "bool_ge_reif") && !reverse)) &&
+                 !var->IsAllInt64()) {  // int_ge
+        if (var->Min() >= value) {
           state = 1;
-        } else if (var->domain.Max() < value) {
+        } else if (var->Max() < value) {
           state = 0;
         }
       } else if ((((id == "int_le_reif" || id == "bool_le_reif") && !reverse) ||
                   ((id == "int_ge_reif" || id == "bool_ge_reif") && reverse)) &&
-                 !var->domain.IsAllInt64()) {  // int_le
-        if (var->domain.Max() <= value) {
+                 !var->IsAllInt64()) {  // int_le
+        if (var->Max() <= value) {
           state = 1;
-        } else if (var->domain.Min() > value) {
+        } else if (var->Min() > value) {
           state = 0;
         }
       }
       if (state != 2) {
-        StringAppendF(log, "assign boolvar to %s",
-                      state == 0 ? "false" : "true");
-        ct->arguments[2].Var()->domain.IntersectWithSingleton(state);
+        FZVLOG << "Assign boolvar to " << state << " in " << ct->DebugString()
+               << FZENDL;
+        ct->Arg(2).Var()->domain.IntersectWithInterval(state, state);
         ct->MarkAsInactive();
         return true;
       }
-    }
-  }
-
-  // Rule 4.
-  if (!ct->arguments[0].HasOneValue() && !ct->arguments[1].HasOneValue()) {
-    const Domain& ld = ct->arguments[0].Var()->domain;
-    const Domain& rd = ct->arguments[1].Var()->domain;
-    int state = 2;  // 0 force_false, 1 force true, 2 unknown.
-    if (id == "int_eq_reif" || id == "bool_eq_reif") {
-      if (ld.Min() > rd.Max() || ld.Max() < rd.Min()) {
-        state = 0;
-      }
-    } else if (id == "int_ne_reif" || id == "bool_ne_reif") {
-      if (ld.Min() > rd.Max() || ld.Max() < rd.Min()) {
-        state = 1;
-      }
-    } else if (id == "int_lt_reif" || id == "bool_lt_reif") {
-      if (ld.Max() < rd.Min()) {
-        state = 1;
-      } else if (ld.Min() >= rd.Max()) {
-        state = 0;
-      }
-    } else if (id == "int_gt_reif" || id == "bool_gt_reif") {
-      if (ld.Max() <= rd.Min()) {
-        state = 0;
-      } else if (ld.Min() > rd.Max()) {
-        state = 1;
-      }
-    } else if (id == "int_le_reif" || id == "bool_le_reif") {
-      if (ld.Max() <= rd.Min()) {
-        state = 1;
-      } else if (ld.Min() > rd.Max()) {
-        state = 0;
-      }
-    } else if (id == "int_ge_reif" || id == "bool_ge_reif") {
-      if (ld.Max() < rd.Min()) {
-        state = 0;
-      } else if (ld.Min() >= rd.Max()) {
-        state = 1;
-      }
-    }
-    if (state != 2) {
-      StringAppendF(log, "assign boolvar to %s", state == 0 ? "false" : "true");
-      ct->arguments[2].Var()->domain.IntersectWithSingleton(state);
-      ct->MarkAsInactive();
-      return true;
     }
   }
   return false;
@@ -2330,224 +2283,113 @@ bool Presolver::PresolveIntMod(Constraint* ct, std::string* log) {
   return false;
 }
 
-// Remove invalid tuples, remove unreached values from domain variables.
-//
-bool Presolver::PresolveTableInt(Constraint* ct, std::string* log) {
-  if (ct->arguments[0].variables.empty()) {
-    return false;
-  }
-  const int num_vars = ct->arguments[0].variables.size();
-  CHECK_EQ(0, ct->arguments[1].values.size() % num_vars);
-  const int num_tuples = ct->arguments[1].values.size() / num_vars;
-  int ignored_tuples = 0;
-  std::vector<int64> new_tuples;
-  std::vector<std::unordered_set<int64>> visited_values(num_vars);
-  for (int t = 0; t < num_tuples; ++t) {
-    std::vector<int64> tuple(ct->arguments[1].values.begin() + t * num_vars,
-                        ct->arguments[1].values.begin() + (t + 1) * num_vars);
-    bool valid = true;
-    for (int i = 0; i < num_vars; ++i) {
-      if (!ct->arguments[0].variables[i]->domain.Contains(tuple[i])) {
-        valid = false;
-        break;
-      }
-    }
-    if (valid) {
-      for (int i = 0; i < num_vars; ++i) {
-        visited_values[i].insert(tuple[i]);
-      }
-      new_tuples.insert(new_tuples.end(), tuple.begin(), tuple.end());
-    } else {
-      ignored_tuples++;
-    }
-  }
-  // Removed invalid tuples.
-  if (ignored_tuples > 0) {
-    log->append(StringPrintf("removed %i tuples", ignored_tuples));
-    ct->arguments[1].values.swap(new_tuples);
-  }
-  // Reduce variables domains.
-  bool variable_changed = false;
-  for (int var_index = 0; var_index < num_vars; ++var_index) {
-    IntegerVariable* const var = ct->arguments[0].variables[var_index];
-    // Store domain info to detect change.
-    const bool is_interval = var->domain.is_interval;
-    const int vsize = var->domain.values.size();
-    const int vmin =
-        var->domain.values.empty() ? 0 : var->domain.values.front();
-    const int vmax = var->domain.values.empty() ? 0 : var->domain.values.back();
-    std::vector<int64> values(visited_values[var_index].begin(),
-                         visited_values[var_index].end());
-    // TODO(user): Add return value that indicates change to IntersectXXX().
-    var->domain.IntersectWithListOfIntegers(values);
-    variable_changed |= is_interval != var->domain.is_interval ||
-                        vsize != var->domain.values.size() ||
-                        vmin != var->domain.values.front() ||
-                        vmax != var->domain.values.back();
-  }
-  return variable_changed || ignored_tuples > 0;
-}
-
-// Tranform diffn into all_different_int when sizes and y positions are all 1.
-//
-// Input : diffn([x1, .. xn], [1, .., 1], [1, .., 1], [1, .., 1])
-// Output: all_different_int([x1, .. xn])
-bool Presolver::PresolveDiffN(Constraint* ct, std::string* log) {
-  const int size = ct->arguments[0].variables.size();
-  if (size > 0 && ct->arguments[1].IsArrayOfValues() &&
-      ct->arguments[2].IsArrayOfValues() &&
-      ct->arguments[3].IsArrayOfValues()) {
-    for (int i = 0; i < size; ++i) {
-      if (ct->arguments[1].ValueAt(i) != 1) {
-        return false;
-      }
-    }
-    for (int i = 0; i < size; ++i) {
-      if (ct->arguments[2].ValueAt(i) != 1) {
-        return false;
-      }
-    }
-    for (int i = 0; i < size; ++i) {
-      if (ct->arguments[3].ValueAt(i) != 1) {
-        return false;
-      }
-    }
-    ct->type = "all_different_int";
-    ct->arguments.resize(1);
-    return true;
-  }
-  return false;
-}
-
-
-#define CALL_TYPE(ct, t, method)                                            \
-  if (ct->active && ct->type == t) {                                        \
-    changed |= ApplyRule(ct, #method, [this](Constraint* ct, std::string* log) { \
-      return method(ct, log);                                               \
-    });                                                                     \
-  }
-#define CALL_PREFIX(ct, t, method)                                          \
-  if (ct->active && strings::StartsWith(ct->type, t)) {                     \
-    changed |= ApplyRule(ct, #method, [this](Constraint* ct, std::string* log) { \
-      return method(ct, log);                                               \
-    });                                                                     \
-  }
-#define CALL_SUFFIX(ct, t, method)                                          \
-  if (ct->active && strings::EndsWith(ct->type, t)) {                       \
-    changed |= ApplyRule(ct, #method, [this](Constraint* ct, std::string* log) { \
-      return method(ct, log);                                               \
-    });                                                                     \
-  }
-
 // Main presolve rule caller.
-bool Presolver::PresolveOneConstraint(Constraint* ct) {
+bool FzPresolver::PresolveOneConstraint(FzConstraint* ct) {
   bool changed = false;
-  CALL_SUFFIX(ct, "_reif", Unreify);
-  CALL_TYPE(ct, "bool2int", PresolveBool2Int);
-  if (strings::StartsWith(ct->type, "int_")) {
-    CALL_TYPE(ct, "int_le", PresolveInequalities);
-    CALL_TYPE(ct, "int_lt", PresolveInequalities);
-    CALL_TYPE(ct, "int_ge", PresolveInequalities);
-    CALL_TYPE(ct, "int_gt", PresolveInequalities);
-  }
-  if (strings::StartsWith(ct->type, "bool_")) {
-    CALL_TYPE(ct, "bool_le", PresolveInequalities);
-    CALL_TYPE(ct, "bool_lt", PresolveInequalities);
-    CALL_TYPE(ct, "bool_ge", PresolveInequalities);
-    CALL_TYPE(ct, "bool_gt", PresolveInequalities);
-  }
-
-  // TODO(user): use CALL_TYPE macro.
-  if (ct->type == "int_abs" && !ContainsKey(abs_map_, ct->arguments[1].Var())) {
-    // Stores abs() map.
-    FZVLOG << "Stores abs map for " << ct->DebugString() << FZENDL;
-    abs_map_[ct->arguments[1].Var()] = ct->arguments[0].Var();
+  const std::string& id = ct->type;
+  const int num_arguments = ct->arguments.size();
+  if (HasSuffixString(id, "_reif") &&
+      ct->Arg(num_arguments - 1).HasOneValue()) {
+    Unreify(ct);
     changed = true;
   }
-  CALL_TYPE(ct, "int_eq_reif", StoreIntEqReif);
-  CALL_TYPE(ct, "int_ne_reif", SimplifyIntNeReif);
-  // TODO(user): use CALL_TYPE macro.
-  if ((ct->type == "int_eq_reif" || ct->type == "int_ne_reif" ||
-       ct->type == "int_ne") &&
-      ct->arguments[1].HasOneValue() && ct->arguments[1].Value() == 0 &&
-      ContainsKey(abs_map_, ct->arguments[0].Var())) {
+  if (id == "bool2int") changed |= PresolveBool2Int(ct);
+  if (id == "int_le" || id == "int_lt" || id == "int_ge" || id == "int_gt" ||
+      id == "bool_le" || id == "bool_lt" || id == "bool_ge" ||
+      id == "bool_gt") {
+    changed |= PresolveInequalities(ct);
+  }
+  if (id == "int_abs" && !ContainsKey(abs_map_, ct->Arg(1).Var())) {
+    // Stores abs() map.
+    FZVLOG << "Stores abs map for " << ct->DebugString() << FZENDL;
+    abs_map_[ct->Arg(1).Var()] = ct->Arg(0).Var();
+    changed = true;
+  }
+  if (id == "int_eq_reif") {
+    changed |= StoreIntEqReif(ct);
+  }
+  if (id == "int_ne_reif") {
+    changed |= SimplifyIntNeReif(ct);
+  }
+  if ((id == "int_eq_reif" || id == "int_ne_reif" || id == "int_ne") &&
+      ct->Arg(1).HasOneValue() && ct->Arg(1).Value() == 0 &&
+      ContainsKey(abs_map_, ct->Arg(0).Var())) {
     // Simplifies int_eq and int_ne with abs
     // Input : int_eq(x, 0) or int_ne(x, 0) with x == abs(y)
     // Output: int_eq(y, 0) or int_ne(y, 0)
     FZVLOG << "Remove abs() from " << ct->DebugString() << FZENDL;
-    ct->arguments[0].variables[0] = abs_map_[ct->arguments[0].Var()];
+    ct->MutableArg(0)->variables[0] = abs_map_[ct->Arg(0).Var()];
     changed = true;
   }
-  CALL_TYPE(ct, "set_in", PresolveSetIn);
-  CALL_TYPE(ct, "set_not_in", PresolveSetNotIn);
-  CALL_TYPE(ct, "set_in_reif", PresolveSetInReif);
-
-  if (strings::StartsWith(ct->type, "int_lin_")) {
-    CALL_TYPE(ct, "int_lin_gt", PresolveIntLinGt);
-    CALL_TYPE(ct, "int_lin_lt", PresolveIntLinLt);
-    CALL_PREFIX(ct, "int_lin_", PresolveLinear);
-    CALL_PREFIX(ct, "int_lin_", RegroupLinear);
-    CALL_PREFIX(ct, "int_lin_", SimplifyUnaryLinear);
-    CALL_PREFIX(ct, "int_lin_", SimplifyBinaryLinear);
-    CALL_TYPE(ct, "int_lin_eq", PropagatePositiveLinear);
-    CALL_TYPE(ct, "int_lin_le", PropagatePositiveLinear);
-    CALL_TYPE(ct, "int_lin_ge", PropagatePositiveLinear);
-    CALL_TYPE(ct, "int_lin_eq", CreateLinearTarget);
-    CALL_TYPE(ct, "int_lin_eq", PresolveStoreMapping);
-    CALL_TYPE(ct, "int_lin_eq_reif", CheckIntLinReifBounds);
-    CALL_TYPE(ct, "int_lin_eq_reif", SimplifyIntLinEqReif);
+  if ((id == "int_le_reif") && ct->Arg(1).HasOneValue() &&
+      ContainsKey(abs_map_, ct->Arg(0).Var())) {
+    changed |= RemoveAbsFromIntLinReif(ct);
   }
-
-  if (strings::StartsWith(ct->type, "array_")) {
-    CALL_TYPE(ct, "array_bool_and", PresolveArrayBoolAnd);
-    CALL_TYPE(ct, "array_bool_or", PresolveArrayBoolOr);
-    CALL_TYPE(ct, "array_int_element", PresolveSimplifyElement);
-    CALL_TYPE(ct, "array_bool_element", PresolveSimplifyElement);
-    CALL_TYPE(ct, "array_int_element", PresolveArrayIntElement);
-    CALL_TYPE(ct, "array_var_int_element", PresolveSimplifyExprElement);
-    CALL_TYPE(ct, "array_var_bool_element", PresolveSimplifyExprElement);
+  if (id == "int_eq" || id == "bool_eq") changed |= PresolveIntEq(ct);
+  if (id == "int_ne" || id == "bool_not") changed |= PresolveIntNe(ct);
+  if (id == "set_in") changed |= PresolveSetIn(ct);
+  if (id == "array_bool_and") changed |= PresolveArrayBoolAnd(ct);
+  if (id == "array_bool_or") changed |= PresolveArrayBoolOr(ct);
+  if (id == "bool_eq_reif" || id == "bool_ne_reif") {
+    changed |= PresolveBoolEqNeReif(ct);
   }
-
-  if (strings::StartsWith(ct->type, "int_")) {
-    CALL_TYPE(ct, "int_div", PresolveIntDiv);
-    CALL_TYPE(ct, "int_times", PresolveIntTimes);
-    CALL_TYPE(ct, "int_eq", PresolveIntEq);
-    CALL_TYPE(ct, "int_ne", PresolveIntNe);
-    CALL_TYPE(ct, "int_eq_reif", PropagateReifiedComparisons);
-    CALL_TYPE(ct, "int_ne_reif", PropagateReifiedComparisons);
-    CALL_TYPE(ct, "int_le_reif", RemoveAbsFromIntLeReif);
-    CALL_TYPE(ct, "int_le_reif", PropagateReifiedComparisons);
-    CALL_TYPE(ct, "int_lt_reif", PropagateReifiedComparisons);
-    CALL_TYPE(ct, "int_ge_reif", PropagateReifiedComparisons);
-    CALL_TYPE(ct, "int_gt_reif", PropagateReifiedComparisons);
-    CALL_TYPE(ct, "int_mod", PresolveIntMod);
+  if (id == "bool_xor") {
+    changed |= PresolveBoolXor(ct);
   }
-
-  if (strings::StartsWith(ct->type, "bool_")) {
-    CALL_TYPE(ct, "bool_eq", PresolveIntEq);
-    CALL_TYPE(ct, "bool_ne", PresolveIntNe);
-    CALL_TYPE(ct, "bool_not", PresolveIntNe);
-    CALL_TYPE(ct, "bool_eq_reif", PresolveBoolEqNeReif);
-    CALL_TYPE(ct, "bool_ne_reif", PresolveBoolEqNeReif);
-    CALL_TYPE(ct, "bool_xor", PresolveBoolXor);
-    CALL_TYPE(ct, "bool_ne", PresolveBoolNot);
-    CALL_TYPE(ct, "bool_not", PresolveBoolNot);
-    CALL_TYPE(ct, "bool_clause", PresolveBoolClause);
-    CALL_TYPE(ct, "bool_eq_reif", PropagateReifiedComparisons);
-    CALL_TYPE(ct, "bool_ne_reif", PropagateReifiedComparisons);
-    CALL_TYPE(ct, "bool_le_reif", PropagateReifiedComparisons);
-    CALL_TYPE(ct, "bool_lt_reif", PropagateReifiedComparisons);
-    CALL_TYPE(ct, "bool_ge_reif", PropagateReifiedComparisons);
-    CALL_TYPE(ct, "bool_gt_reif", PropagateReifiedComparisons);
+  if (id == "bool_not") {
+    changed |= PresolveBoolNot(ct);
   }
-  CALL_TYPE(ct, "table_int", PresolveTableInt);
-  CALL_TYPE(ct, "diffn", PresolveDiffN);
-
+  if (id == "bool_clause") {
+    changed |= PresolveBoolClause(ct);
+  }
+  if (id == "int_div") changed |= PresolveIntDiv(ct);
+  if (id == "int_times") changed |= PresolveIntTimes(ct);
+  if (id == "int_lin_gt") changed |= PresolveIntLinGt(ct);
+  if (id == "int_lin_lt") changed |= PresolveIntLinLt(ct);
+  if (HasPrefixString(id, "int_lin_")) {
+    changed |= PresolveLinear(ct);
+  }
+  // type can have changed after the presolve.
+  if (HasPrefixString(id, "int_lin_")) {
+    changed |= RegroupLinear(ct);
+    changed |= SimplifyUnaryLinear(ct);
+  }
+  if (HasPrefixString(id, "int_lin_")) {
+    changed |= SimplifyBinaryLinear(ct);
+  }
+  if (id == "int_lin_eq" || id == "int_lin_le" || id == "int_lin_ge") {
+    const bool upper = !(id == "int_lin_ge");
+    changed |= PropagatePositiveLinear(ct, upper);
+  }
+  if (id == "int_lin_eq") {
+    changed |= CreateLinearTarget(ct);
+  }
+  if (id == "int_lin_eq") changed |= PresolveStoreMapping(ct);
+  if (id == "int_lin_eq_reif") changed |= CheckIntLinReifBounds(ct);
+  if (id == "int_lin_eq_reif") changed |= SimplifyIntLinEqReif(ct);
+  if (id == "array_int_element") {
+    changed |= PresolveSimplifyElement(ct);
+  }
+  // Type could have changed in the previous rule. We need to test again.
+  if (id == "array_int_element") {
+    changed |= PresolveArrayIntElement(ct);
+  }
+  if (id == "array_var_int_element") {
+    changed |= PresolveSimplifyExprElement(ct);
+  }
+  if (id == "int_eq_reif" || id == "int_ne_reif" || id == "int_le_reif" ||
+      id == "int_lt_reif" || id == "int_ge_reif" || id == "int_gt_reif" ||
+      id == "bool_eq_reif" || id == "bool_ne_reif" || id == "bool_le_reif" ||
+      id == "bool_lt_reif" || id == "bool_ge_reif" || id == "bool_gt_reif") {
+    changed |= PropagateReifiedComparisons(ct);
+  }
+  if (id == "int_mod") {
+    changed |= PresolveIntMod(ct);
+  }
   // Last rule: if the target variable of a constraint is fixed, removed it
   // the target part.
-  if (ct->target_variable != nullptr &&
-      ct->target_variable->domain.HasOneValue()) {
-    FZVLOG << "Remove the target variable from " << ct->DebugString()
+  if (ct->target_variable != nullptr && ct->target_variable->HasOneValue()) {
+    FZVLOG << "Remove target variable from " << ct->DebugString()
            << " as it is fixed to a single value" << FZENDL;
     ct->target_variable->defining_constraint = nullptr;
     ct->target_variable = nullptr;
@@ -2556,51 +2398,43 @@ bool Presolver::PresolveOneConstraint(Constraint* ct) {
   return changed;
 }
 
-#undef CALL_TYPE
-#undef CALL_PREFIX
-#undef CALL_SUFFIX
-
 // Stores all pairs of variables appearing in an int_ne(x, y) constraint.
-void Presolver::StoreDifference(Constraint* ct) {
-  if (ct->arguments[2].Value() == 0 && ct->arguments[0].values.size() == 3) {
+void FzPresolver::StoreDifference(FzConstraint* ct) {
+  if (ct->Arg(2).Value() == 0 && ct->Arg(0).values.size() == 3) {
     // Looking for a difference var.
-    if ((ct->arguments[0].values[0] == 1 && ct->arguments[0].values[1] == -1 &&
-         ct->arguments[0].values[2] == 1) ||
-        (ct->arguments[0].values[0] == -1 && ct->arguments[0].values[1] == 1 &&
-         ct->arguments[0].values[2] == -1)) {
+    if ((ct->Arg(0).values[0] == 1 && ct->Arg(0).values[1] == -1 &&
+         ct->Arg(0).values[2] == 1) ||
+        (ct->Arg(0).values[0] == -1 && ct->Arg(0).values[1] == 1 &&
+         ct->Arg(0).values[2] == -1)) {
       FZVLOG << "Store differences from " << ct->DebugString() << FZENDL;
-      difference_map_[ct->arguments[1].variables[0]] = std::make_pair(
-          ct->arguments[1].variables[2], ct->arguments[1].variables[1]);
-      difference_map_[ct->arguments[1].variables[2]] = std::make_pair(
-          ct->arguments[1].variables[0], ct->arguments[1].variables[1]);
+      difference_map_[ct->Arg(1).variables[0]] =
+          std::make_pair(ct->Arg(1).variables[2], ct->Arg(1).variables[1]);
+      difference_map_[ct->Arg(1).variables[2]] =
+          std::make_pair(ct->Arg(1).variables[0], ct->Arg(1).variables[1]);
     }
   }
 }
 
-void Presolver::MergeIntEqNe(Model* model) {
-  std::unordered_map<const IntegerVariable*,
-                     std::unordered_map<int64, IntegerVariable*>>
+void FzPresolver::MergeIntEqNe(FzModel* model) {
+  hash_map<const FzIntegerVariable*, hash_map<int64, FzIntegerVariable*>>
       int_eq_reif_map;
-  std::unordered_map<const IntegerVariable*,
-                     std::unordered_map<int64, IntegerVariable*>>
+  hash_map<const FzIntegerVariable*, hash_map<int64, FzIntegerVariable*>>
       int_ne_reif_map;
-  for (Constraint* const ct : model->constraints()) {
+  for (FzConstraint* const ct : model->constraints()) {
     if (!ct->active) continue;
-    if (ct->type == "int_eq_reif" && ct->arguments[2].values.empty()) {
-      IntegerVariable* var = nullptr;
+    if (ct->type == "int_eq_reif" && ct->Arg(2).values.empty()) {
+      FzIntegerVariable* var = nullptr;
       int64 value = 0;
-      if (ct->arguments[0].values.empty() &&
-          ct->arguments[1].variables.empty()) {
-        var = ct->arguments[0].Var();
-        value = ct->arguments[1].Value();
-      } else if (ct->arguments[1].values.empty() &&
-                 ct->arguments[0].variables.empty()) {
-        var = ct->arguments[1].Var();
-        value = ct->arguments[0].Value();
+      if (ct->Arg(0).values.empty() && ct->Arg(1).variables.empty()) {
+        var = ct->Arg(0).Var();
+        value = ct->Arg(1).Value();
+      } else if (ct->Arg(1).values.empty() && ct->Arg(0).variables.empty()) {
+        var = ct->Arg(1).Var();
+        value = ct->Arg(0).Value();
       }
       if (var != nullptr) {
-        IntegerVariable* boolvar = ct->arguments[2].Var();
-        IntegerVariable* stored = FindPtrOrNull(int_eq_reif_map[var], value);
+        FzIntegerVariable* boolvar = ct->Arg(2).Var();
+        FzIntegerVariable* stored = FindPtrOrNull(int_eq_reif_map[var], value);
         if (stored == nullptr) {
           FZVLOG << "Store " << ct->DebugString() << FZENDL;
           int_eq_reif_map[var][value] = boolvar;
@@ -2608,26 +2442,23 @@ void Presolver::MergeIntEqNe(Model* model) {
           FZVLOG << "Merge " << ct->DebugString() << FZENDL;
           ct->MarkAsInactive();
           AddVariableSubstition(stored, boolvar);
-          successful_rules_["MergeIntEqNe"]++;
         }
       }
     }
 
-    if (ct->type == "int_ne_reif" && ct->arguments[2].values.empty()) {
-      IntegerVariable* var = nullptr;
+    if (ct->type == "int_ne_reif" && ct->Arg(2).values.empty()) {
+      FzIntegerVariable* var = nullptr;
       int64 value = 0;
-      if (ct->arguments[0].values.empty() &&
-          ct->arguments[1].variables.empty()) {
-        var = ct->arguments[0].Var();
-        value = ct->arguments[1].Value();
-      } else if (ct->arguments[1].values.empty() &&
-                 ct->arguments[0].variables.empty()) {
-        var = ct->arguments[1].Var();
-        value = ct->arguments[0].Value();
+      if (ct->Arg(0).values.empty() && ct->Arg(1).variables.empty()) {
+        var = ct->Arg(0).Var();
+        value = ct->Arg(1).Value();
+      } else if (ct->Arg(1).values.empty() && ct->Arg(0).variables.empty()) {
+        var = ct->Arg(1).Var();
+        value = ct->Arg(0).Value();
       }
       if (var != nullptr) {
-        IntegerVariable* boolvar = ct->arguments[2].Var();
-        IntegerVariable* stored = FindPtrOrNull(int_ne_reif_map[var], value);
+        FzIntegerVariable* boolvar = ct->Arg(2).Var();
+        FzIntegerVariable* stored = FindPtrOrNull(int_ne_reif_map[var], value);
         if (stored == nullptr) {
           FZVLOG << "Store " << ct->DebugString() << FZENDL;
           int_ne_reif_map[var][value] = boolvar;
@@ -2635,7 +2466,6 @@ void Presolver::MergeIntEqNe(Model* model) {
           FZVLOG << "Merge " << ct->DebugString() << FZENDL;
           ct->MarkAsInactive();
           AddVariableSubstition(stored, boolvar);
-          successful_rules_["MergeIntEqNe"]++;
         }
       }
     }
