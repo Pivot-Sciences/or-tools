@@ -3,7 +3,7 @@ java: javaortools
 
 # Clean target
 clean_java:
-	-$(DEL) $(LIB_DIR)$S$(LIBPREFIX)jni*.$(JNI_LIB_EXT)
+	-$(DEL) $(LIB_DIR)$S$(LIB_PREFIX)jni*.$(JNI_LIB_EXT)
 	-$(DEL) $(LIB_DIR)$S*.jar
 	-$(DEL) $(GEN_DIR)$Scom$Sgoogle$Sortools$Sconstraintsolver$S*.java
 	-$(DEL) $(GEN_DIR)$Scom$Sgoogle$Sortools$Sgraph$S*.java
@@ -24,12 +24,12 @@ clean_java:
 
 # javaortools
 
-javaortools: $(LIB_DIR)/com.google.ortools.jar $(LIB_DIR)/$(LIBPREFIX)jniortools.$(JNI_LIB_EXT)
+javaortools: $(LIB_DIR)/com.google.ortools.jar $(LIB_DIR)/$(LIB_PREFIX)jniortools.$(JNI_LIB_EXT)
 
-$(GEN_DIR)/constraint_solver/constraint_solver_java_wrap.cc: $(SRC_DIR)/constraint_solver/java/constraint_solver.swig $(SRC_DIR)/constraint_solver/java/routing.swig $(SRC_DIR)/base/base.swig $(SRC_DIR)/util/java/vector.swig $(SRC_DIR)/base/base.swig $(SRC_DIR)/util/java/proto.swig $(SRC_DIR)/constraint_solver/constraint_solver.h $(SRC_DIR)/constraint_solver/routing.h
+$(GEN_DIR)/constraint_solver/constraint_solver_java_wrap.cc: $(SRC_DIR)/constraint_solver/java/constraint_solver.swig $(SRC_DIR)/constraint_solver/java/routing.swig $(SRC_DIR)/base/base.swig $(SRC_DIR)/util/java/vector.swig $(SRC_DIR)/base/base.swig $(SRC_DIR)/util/java/proto.swig $(ROUTING_DEPS)
 	$(SWIG_BINARY) -I$(INC_DIR) -c++ -java -o $(GEN_DIR)$Sconstraint_solver$Sconstraint_solver_java_wrap.cc -package com.google.ortools.constraintsolver -module operations_research_constraint_solver -outdir $(GEN_DIR)$Scom$Sgoogle$Sortools$Sconstraintsolver $(SRC_DIR)$Sconstraint_solver$Sjava$Srouting.swig
 
-$(OBJ_DIR)/swig/constraint_solver_java_wrap.$O: $(GEN_DIR)/constraint_solver/constraint_solver_java_wrap.cc
+$(OBJ_DIR)/swig/constraint_solver_java_wrap.$O: $(GEN_DIR)/constraint_solver/constraint_solver_java_wrap.cc $(ROUTING_DEPS)
 	$(CCC) $(JNIFLAGS) $(JAVA_INC) -c $(GEN_DIR)$Sconstraint_solver$Sconstraint_solver_java_wrap.cc $(OBJ_OUT)$(OBJ_DIR)$Sswig$Sconstraint_solver_java_wrap.$O
 
 $(GEN_DIR)/algorithms/knapsack_solver_java_wrap.cc: $(SRC_DIR)/algorithms/java/knapsack_solver.swig $(SRC_DIR)/base/base.swig $(SRC_DIR)/util/java/vector.swig $(SRC_DIR)/algorithms/knapsack_solver.h
@@ -38,16 +38,16 @@ $(GEN_DIR)/algorithms/knapsack_solver_java_wrap.cc: $(SRC_DIR)/algorithms/java/k
 $(OBJ_DIR)/swig/knapsack_solver_java_wrap.$O: $(GEN_DIR)/algorithms/knapsack_solver_java_wrap.cc
 	$(CCC) $(JNIFLAGS) $(JAVA_INC) -c $(GEN_DIR)$Salgorithms$Sknapsack_solver_java_wrap.cc $(OBJ_OUT)$(OBJ_DIR)$Sswig$Sknapsack_solver_java_wrap.$O
 
-$(GEN_DIR)/graph/graph_java_wrap.cc: $(SRC_DIR)/graph/java/graph.swig $(SRC_DIR)/base/base.swig $(SRC_DIR)/graph/max_flow.h $(SRC_DIR)/graph/min_cost_flow.h $(SRC_DIR)/graph/linear_assignment.h
+$(GEN_DIR)/graph/graph_java_wrap.cc: $(SRC_DIR)/graph/java/graph.swig $(SRC_DIR)/base/base.swig $(GRAPH_DEPS)
 	$(SWIG_BINARY) -I$(INC_DIR) -c++ -java -o $(GEN_DIR)$Sgraph$Sgraph_java_wrap.cc -package com.google.ortools.graph -module operations_research_graph -outdir $(GEN_DIR)$Scom$Sgoogle$Sortools$Sgraph $(SRC_DIR)$Sgraph$Sjava$Sgraph.swig
 
-$(GEN_DIR)/linear_solver/linear_solver_java_wrap.cc: $(SRC_DIR)/linear_solver/java/linear_solver.swig $(SRC_DIR)/base/base.swig $(SRC_DIR)/util/java/vector.swig $(SRC_DIR)/linear_solver/linear_solver.h $(GEN_DIR)/linear_solver/linear_solver.pb.h
+$(GEN_DIR)/linear_solver/linear_solver_java_wrap.cc: $(SRC_DIR)/linear_solver/java/linear_solver.swig $(SRC_DIR)/base/base.swig $(SRC_DIR)/util/java/vector.swig $(LP_DEPS)
 	$(SWIG_BINARY) $(SWIG_INC) -I$(INC_DIR) -c++ -java -o $(GEN_DIR)$Slinear_solver$Slinear_solver_java_wrap.cc -package com.google.ortools.linearsolver -module operations_research_linear_solver -outdir $(GEN_DIR)$Scom$Sgoogle$Sortools$Slinearsolver $(SRC_DIR)$Slinear_solver$Sjava$Slinear_solver.swig
 
-$(OBJ_DIR)/swig/linear_solver_java_wrap.$O: $(GEN_DIR)/linear_solver/linear_solver_java_wrap.cc
+$(OBJ_DIR)/swig/linear_solver_java_wrap.$O: $(GEN_DIR)/linear_solver/linear_solver_java_wrap.cc $(LP_DEPS)
 	$(CCC) $(JNIFLAGS) $(JAVA_INC) -c $(GEN_DIR)$Slinear_solver$Slinear_solver_java_wrap.cc $(OBJ_OUT)$(OBJ_DIR)$Sswig$Slinear_solver_java_wrap.$O
 
-$(OBJ_DIR)/swig/graph_java_wrap.$O: $(GEN_DIR)/graph/graph_java_wrap.cc
+$(OBJ_DIR)/swig/graph_java_wrap.$O: $(GEN_DIR)/graph/graph_java_wrap.cc $(GRAPH_DEPS)
 	$(CCC) $(JNIFLAGS) $(JAVA_INC) -c $(GEN_DIR)$Sgraph$Sgraph_java_wrap.cc $(OBJ_OUT)$(OBJ_DIR)$Sswig$Sgraph_java_wrap.$O
 
 $(GEN_DIR)/com/google/ortools/constraintsolver/SearchLimitProtobuf.java: $(SRC_DIR)/constraint_solver/search_limit.proto
@@ -62,7 +62,7 @@ $(GEN_DIR)/com/google/ortools/constraintsolver/RoutingParameters.java: $(SRC_DIR
 $(GEN_DIR)/com/google/ortools/constraintsolver/RoutingEnums.java: $(SRC_DIR)/constraint_solver/routing_enums.proto
 	$(PROTOBUF_DIR)/bin/protoc --proto_path=$(SRC_DIR) --java_out=$(GEN_DIR) $(SRC_DIR)$Sconstraint_solver$Srouting_enums.proto
 
-$(LIB_DIR)/protobuf.jar: dependencies$Sinstall$Slib$Sprotobuf.jar
+$(LIB_DIR)/protobuf.jar: dependencies/install/lib/protobuf.jar
 	$(COPY) dependencies$Sinstall$Slib$Sprotobuf.jar $(LIB_DIR)
 
 $(LIB_DIR)/com.google.ortools.jar: \
@@ -78,13 +78,13 @@ $(LIB_DIR)/com.google.ortools.jar: \
 	$(JAVAC_BIN) -d $(OBJ_DIR) -cp lib$Sprotobuf.jar $(SRC_DIR)$Scom$Sgoogle$Sortools$Sconstraintsolver$S*.java $(GEN_DIR)$Scom$Sgoogle$Sortools$Sconstraintsolver$S*.java $(GEN_DIR)$Scom$Sgoogle$Sortools$Salgorithms$S*.java $(GEN_DIR)$Scom$Sgoogle$Sortools$Sgraph$S*.java $(GEN_DIR)$Scom$Sgoogle$Sortools$Slinearsolver$S*.java
 	$(JAR_BIN) cf $(LIB_DIR)$Scom.google.ortools.jar -C $(OBJ_DIR) com$Sgoogle$Sortools$S
 
-$(LIB_DIR)/$(LIBPREFIX)jniortools.$(JNI_LIB_EXT): \
+$(LIB_DIR)/$(LIB_PREFIX)jniortools.$(JNI_LIB_EXT): \
 	$(OBJ_DIR)/swig/constraint_solver_java_wrap.$O \
 	$(OBJ_DIR)/swig/knapsack_solver_java_wrap.$O \
 	$(OBJ_DIR)/swig/graph_java_wrap.$O \
 	$(OBJ_DIR)/swig/linear_solver_java_wrap.$O \
-	$(STATIC_ALL_DEPS)
-	$(DYNAMIC_LD) $(LDOUT)$(LIB_DIR)$S$(LIBPREFIX)jniortools.$(JNI_LIB_EXT) $(OBJ_DIR)$Sswig$Sconstraint_solver_java_wrap.$O $(OBJ_DIR)/swig/knapsack_solver_java_wrap.$O $(OBJ_DIR)/swig/graph_java_wrap.$O $(OBJ_DIR)/swig/linear_solver_java_wrap.$O $(STATIC_ALL_LNK) $(STATIC_LD_FLAGS)
+	$(OR_TOOLS_LIBS)
+	$(DYNAMIC_LD) $(LDOUT)$(LIB_DIR)$S$(LIB_PREFIX)jniortools.$(JNI_LIB_EXT) $(OBJ_DIR)$Sswig$Sconstraint_solver_java_wrap.$O $(OBJ_DIR)/swig/knapsack_solver_java_wrap.$O $(OBJ_DIR)/swig/graph_java_wrap.$O $(OBJ_DIR)/swig/linear_solver_java_wrap.$O $(OR_TOOLS_LNK) $(OR_TOOLS_LD_FLAGS)
 
 # Java CP Examples
 
@@ -364,8 +364,6 @@ compile_MultiThreadIntegerProgramming: $(OBJ_DIR)/com/google/ortools/samples/Mul
 $(OBJ_DIR)/com/google/ortools/samples/MultiThreadTest.class: javaortools $(EX_DIR)/com/google/ortools/samples/MultiThreadTest.java
 	$(JAVAC_BIN) -d $(OBJ_DIR) -cp $(LIB_DIR)$Scom.google.ortools.jar$(CPSEP)$(LIB_DIR)$Sprotobuf.jar $(EX_DIR)$Scom$Sgoogle$Sortools$Ssamples$SMultiThreadTest.java
 
-
-
 # Compile and Run CP java example:
 
 $(OBJ_DIR)/com/google/ortools/samples/$(EX).class: javaortools $(EX_DIR)/com/google/ortools/samples/$(EX).java
@@ -375,75 +373,3 @@ cjava: $(OBJ_DIR)/com/google/ortools/samples/$(EX).class
 
 rjava: $(OBJ_DIR)/com/google/ortools/samples/$(EX).class javaortools
 	$(JAVA_BIN) -Djava.library.path=$(LIB_DIR) -cp $(OBJ_DIR)$(CPSEP)$(LIB_DIR)$Scom.google.ortools.jar$(CPSEP)$(LIB_DIR)$Sprotobuf.jar com.google.ortools.samples.$(EX) $(ARGS)
-
-# Build stand-alone archive file for redistribution.
-
-java_archive: java
-	-$(DELREC) temp
-	$(MKDIR) temp
-	$(MKDIR) temp$Sor-tools.$(PORT)
-	$(MKDIR) temp$Sor-tools.$(PORT)$Slib
-	$(MKDIR) temp$Sor-tools.$(PORT)$Sobjs
-	$(COPY) LICENSE-2.0.txt temp$Sor-tools.$(PORT)
-	$(COPY) tools$SREADME.java temp$Sor-tools.$(PORT)$SREADME
-	$(COPY) lib$S*.jar temp$Sor-tools.$(PORT)$Slib
-	$(COPY) lib$S$(LIBPREFIX)jni*.$(JNI_LIB_EXT) temp$Sor-tools.$(PORT)$Slib
-ifeq ("$(SYSTEM)","win")
-	tools\mkdir temp\or-tools.$(PORT)\examples
-	tools\mkdir temp\or-tools.$(PORT)\examples\com
-	tools\mkdir temp\or-tools.$(PORT)\examples\com\google
-	tools\mkdir temp\or-tools.$(PORT)\examples\com\google\ortools
-	tools\mkdir temp\or-tools.$(PORT)\examples\com\google\ortools\algorithms
-	tools\mkdir temp\or-tools.$(PORT)\examples\com\google\ortools\constraintsolver
-	tools\mkdir temp\or-tools.$(PORT)\examples\com\google\ortools\graph
-	tools\mkdir temp\or-tools.$(PORT)\examples\com\google\ortools\linearsolver
-	tools\mkdir temp\or-tools.$(PORT)\examples\com\google\ortools\samples
-	tools\mkdir temp\or-tools.$(PORT)\examples\data
-	tools\mkdir temp\or-tools.$(PORT)\examples\data\discrete_tomography
-	tools\mkdir temp\or-tools.$(PORT)\examples\data\fill_a_pix
-	tools\mkdir temp\or-tools.$(PORT)\examples\data\minesweeper
-	tools\mkdir temp\or-tools.$(PORT)\examples\data\rogo
-	tools\mkdir temp\or-tools.$(PORT)\examples\data\survo_puzzle
-	tools\mkdir temp\or-tools.$(PORT)\examples\data\quasigroup_completion
-	copy examples\data\discrete_tomography\* temp\or-tools.$(PORT)\examples\data\discrete_tomography
-	copy examples\data\fill_a_pix\* temp\or-tools.$(PORT)\examples\data\fill_a_pix
-	copy examples\data\minesweeper\* temp\or-tools.$(PORT)\examples\data\minesweeper
-	copy examples\data\rogo\* temp\or-tools.$(PORT)\examples\data\rogo
-	copy examples\data\survo_puzzle\* temp\or-tools.$(PORT)\examples\data\survo_puzzle
-	copy examples\data\quasigroup_completion\* temp\or-tools.$(PORT)\examples\data\quasigroup_completion
-	copy examples\com\google\ortools\samples\*.java temp\or-tools.$(PORT)\examples\com\google\ortools\samples
-	copy examples\com\google\ortools\samples\*.java temp\or-tools.$(PORT)\examples\com\google\ortools\samples
-	copy examples\com\google\ortools\samples\*.java temp\or-tools.$(PORT)\examples\com\google\ortools\samples
-	copy examples\com\google\ortools\samples\*.java temp\or-tools.$(PORT)\examples\com\google\ortools\samples
-	cd temp && ..$Stools$Szip.exe -r ..$SGoogle.OrTools.java.$(PORT).$(GIT_REVISION).zip or-tools.$(PORT)
-else
-	mkdir temp/or-tools.$(PORT)/examples
-	mkdir temp/or-tools.$(PORT)/examples/com
-	mkdir temp/or-tools.$(PORT)/examples/com/google
-	mkdir temp/or-tools.$(PORT)/examples/com/google/ortools
-	mkdir temp/or-tools.$(PORT)/examples/com/google/ortools/algorithms
-	mkdir temp/or-tools.$(PORT)/examples/com/google/ortools/constraintsolver
-	mkdir temp/or-tools.$(PORT)/examples/com/google/ortools/graph
-	mkdir temp/or-tools.$(PORT)/examples/com/google/ortools/linearsolver
-	mkdir temp/or-tools.$(PORT)/examples/com/google/ortools/samples
-	mkdir temp/or-tools.$(PORT)/examples/data
-	mkdir temp/or-tools.$(PORT)/examples/data/discrete_tomography
-	mkdir temp/or-tools.$(PORT)/examples/data/fill_a_pix
-	mkdir temp/or-tools.$(PORT)/examples/data/minesweeper
-	mkdir temp/or-tools.$(PORT)/examples/data/rogo
-	mkdir temp/or-tools.$(PORT)/examples/data/survo_puzzle
-	mkdir temp/or-tools.$(PORT)/examples/data/quasigroup_completion
-	cp examples/data/discrete_tomography/* temp/or-tools.$(PORT)/examples/data/discrete_tomography
-	cp examples/data/fill_a_pix/* temp/or-tools.$(PORT)/examples/data/fill_a_pix
-	cp examples/data/minesweeper/* temp/or-tools.$(PORT)/examples/data/minesweeper
-	cp examples/data/rogo/* temp/or-tools.$(PORT)/examples/data/rogo
-	cp examples/data/survo_puzzle/* temp/or-tools.$(PORT)/examples/data/survo_puzzle
-	cp examples/data/quasigroup_completion/* temp/or-tools.$(PORT)/examples/data/quasigroup_completion
-	cp examples/com/google/ortools/samples/*.java temp/or-tools.$(PORT)/examples/com/google/ortools/samples
-	cp examples/com/google/ortools/samples/*.java temp/or-tools.$(PORT)/examples/com/google/ortools/samples
-	cp examples/com/google/ortools/samples/*.java temp/or-tools.$(PORT)/examples/com/google/ortools/samples
-	cp examples/com/google/ortools/samples/*.java temp/or-tools.$(PORT)/examples/com/google/ortools/samples
-	cp examples/com/google/ortools/samples/*.java temp/or-tools.$(PORT)/examples/com/google/ortools/samples
-	cd temp && tar -c -v -z --no-same-owner -f ../Google.OrTools.java.$(PORT).$(GIT_REVISION).tar.gz or-tools.$(PORT)
-endif
-	-$(DELREC) temp

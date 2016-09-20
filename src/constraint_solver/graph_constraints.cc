@@ -16,9 +16,9 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/integral_types.h"
 #include "base/logging.h"
+#include "base/join.h"
 #include "constraint_solver/constraint_solver.h"
 #include "constraint_solver/constraint_solveri.h"
 #include "util/saturated_arithmetic.h"
@@ -836,7 +836,8 @@ bool PathCumul::AcceptLink(int i, int j) const {
 }
 
 namespace {
-template <class T> class StampedVector {
+template <class T>
+class StampedVector {
  public:
   StampedVector() : stamp_(0) {}
   const std::vector<T>& Values(Solver* solver) {
@@ -866,10 +867,8 @@ template <class T> class StampedVector {
 
 class DelayedPathCumul : public Constraint {
  public:
-  DelayedPathCumul(Solver* const solver,
-                   const std::vector<IntVar*>& nexts,
-                   const std::vector<IntVar*>& active,
-                   const std::vector<IntVar*>& cumuls,
+  DelayedPathCumul(Solver* const solver, const std::vector<IntVar*>& nexts,
+                   const std::vector<IntVar*>& active, const std::vector<IntVar*>& cumuls,
                    const std::vector<IntVar*>& transits)
       : Constraint(solver),
         nexts_(nexts),
@@ -903,17 +902,15 @@ class DelayedPathCumul : public Constraint {
     solver()->RegisterDemon(path_demon_);
     for (int i = 0; i < nexts_.size(); ++i) {
       if (!nexts_[i]->Bound()) {
-        Demon* const demon =
-            MakeConstraintDemon1(solver(), this, &DelayedPathCumul::NextBound,
-                                 "NextBound", i);
+        Demon* const demon = MakeConstraintDemon1(
+            solver(), this, &DelayedPathCumul::NextBound, "NextBound", i);
         nexts_[i]->WhenBound(demon);
       }
     }
     for (int i = 0; i < active_.size(); ++i) {
       if (!active_[i]->Bound()) {
-        Demon* const demon =
-            MakeConstraintDemon1(solver(), this, &DelayedPathCumul::ActiveBound,
-                                 "ActiveBound", i);
+        Demon* const demon = MakeConstraintDemon1(
+            solver(), this, &DelayedPathCumul::ActiveBound, "ActiveBound", i);
         active_[i]->WhenBound(demon);
       }
     }
@@ -1023,7 +1020,7 @@ class DelayedPathCumul : public Constraint {
   }
 
   void Accept(ModelVisitor* const visitor) const override {
-    visitor->BeginVisitConstraint(ModelVisitor::kPathCumul, this);
+    visitor->BeginVisitConstraint(ModelVisitor::kDelayedPathCumul, this);
     visitor->VisitIntegerVariableArrayArgument(ModelVisitor::kNextsArgument,
                                                nexts_);
     visitor->VisitIntegerVariableArrayArgument(ModelVisitor::kActiveArgument,
@@ -1032,7 +1029,7 @@ class DelayedPathCumul : public Constraint {
                                                cumuls_);
     visitor->VisitIntegerVariableArrayArgument(ModelVisitor::kTransitsArgument,
                                                transits_);
-    visitor->EndVisitConstraint(ModelVisitor::kPathCumul, this);
+    visitor->EndVisitConstraint(ModelVisitor::kDelayedPathCumul, this);
   }
 
   std::string DebugString() const override {
@@ -1098,7 +1095,7 @@ class DelayedPathCumul : public Constraint {
     IntVar* const next_cumul_var = cumuls_[next];
     IntVar* const transit = transits_[index];
     return transit->Min() <= CapSub(next_cumul_var->Max(), cumul_var->Min()) &&
-        CapSub(next_cumul_var->Min(), cumul_var->Max()) <= transit->Max();
+           CapSub(next_cumul_var->Min(), cumul_var->Max()) <= transit->Max();
   }
 
   const std::vector<IntVar*> nexts_;
@@ -1315,5 +1312,114 @@ Constraint* Solver::MakeDelayedPathCumul(const std::vector<IntVar*>& nexts,
   CHECK_EQ(nexts.size(), active.size());
   CHECK_EQ(transits.size(), nexts.size());
   return RevAlloc(new DelayedPathCumul(this, nexts, active, cumuls, transits));
+}
+
+// Constraint enforcing that status[i] is true iff there's a path defined on
+// next variables from sources[i] to sinks[i].
+namespace {
+class PathConnectedConstraint : public Constraint {
+ public:
+  PathConnectedConstraint(Solver* solver, std::vector<IntVar*> nexts,
+                          const std::vector<int64>& sources, std::vector<int64> sinks,
+                          std::vector<IntVar*> status)
+      : Constraint(solver),
+        sources_(sources.size(), -1),
+        index_to_path_(nexts.size(), -1),
+        sinks_(std::move(sinks)),
+        nexts_(std::move(nexts)),
+        status_(std::move(status)),
+        touched_(nexts_.size()) {
+    CHECK_EQ(status_.size(), sources_.size());
+    CHECK_EQ(status_.size(), sinks_.size());
+    for (int i = 0; i < status_.size(); ++i) {
+      const int64 source = sources[i];
+      sources_.SetValue(solver, i, source);
+      if (source < index_to_path_.size()) {
+        index_to_path_.SetValue(solver, source, i);
+      }
+    }
+  }
+  void Post() override {
+    for (int i = 0; i < nexts_.size(); ++i) {
+      nexts_[i]->WhenBound(MakeConstraintDemon1(
+          solver(), this, &PathConnectedConstraint::NextBound, "NextValue", i));
+    }
+    for (int i = 0; i < status_.size(); ++i) {
+      if (sources_[i] < nexts_.size()) {
+        status_[i]->SetRange(0, 1);
+      } else {
+        status_[i]->SetValue(0);
+      }
+    }
+  }
+  void InitialPropagate() override {
+    for (int i = 0; i < status_.size(); ++i) {
+      EvaluatePath(i);
+    }
+  }
+  std::string DebugString() const override {
+    std::string output = "PathConnected(";
+    std::vector<std::string> elements;
+    for (IntVar* const next : nexts_) {
+      elements.push_back(next->DebugString());
+    }
+    for (int i = 0; i < sources_.size(); ++i) {
+      elements.push_back(StrCat(sources_[i]));
+    }
+    for (int64 sink : sinks_) {
+      elements.push_back(StrCat(sink));
+    }
+    for (IntVar* const status : status_) {
+      elements.push_back(status->DebugString());
+    }
+    output += strings::Join(elements, ",") + ")";
+    return output;
+  }
+
+ private:
+  void NextBound(int index) {
+    const int path = index_to_path_[index];
+    if (path >= 0) {
+      EvaluatePath(path);
+    }
+  }
+  void EvaluatePath(int path) {
+    touched_.SparseClearAll();
+    int64 source = sources_[path];
+    const int64 end = sinks_[path];
+    while (source != end) {
+      if (source >= nexts_.size() || touched_[source]) {
+        status_[path]->SetValue(0);
+        return;
+      }
+      touched_.Set(source);
+      IntVar* const next = nexts_[source];
+      if (next->Bound()) {
+        source = next->Min();
+      } else {
+        sources_.SetValue(solver(), path, source);
+        index_to_path_.SetValue(solver(), source, path);
+        return;
+      }
+    }
+    status_[path]->SetValue(1);
+  }
+
+  RevArray<int64> sources_;
+  RevArray<int> index_to_path_;
+  const std::vector<int64> sinks_;
+  const std::vector<IntVar*> nexts_;
+  const std::vector<IntVar*> status_;
+  SparseBitset<int64> touched_;
+};
+}  // namespace
+
+Constraint* Solver::MakePathConnected(std::vector<IntVar*> nexts,
+                                      std::vector<int64> sources,
+                                      std::vector<int64> sinks,
+                                      std::vector<IntVar*> status) {
+  return RevAlloc(
+      new PathConnectedConstraint(this, std::move(nexts), std::move(sources),
+                                  std::move(sinks), std::move(status)));
 }
 }  // namespace operations_research

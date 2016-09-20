@@ -18,6 +18,7 @@
 
 #include "google/protobuf/descriptor.h"
 #include "sat/encoding.h"
+#include "sat/util.h"
 
 namespace operations_research {
 namespace sat {
@@ -713,26 +714,6 @@ SatSolver::Status SolveWithWPM1(LogBehavior log,
   }
 }
 
-void RandomizeDecisionHeuristic(MTRandom* random, SatParameters* parameters) {
-  // Random preferred variable order.
-  const google::protobuf::EnumDescriptor* order_d =
-      SatParameters::VariableOrder_descriptor();
-  parameters->set_preferred_variable_order(
-      static_cast<SatParameters::VariableOrder>(
-          order_d->value(random->Uniform(order_d->value_count()))->number()));
-
-  // Random polarity initial value.
-  const google::protobuf::EnumDescriptor* polarity_d =
-      SatParameters::Polarity_descriptor();
-  parameters->set_initial_polarity(static_cast<SatParameters::Polarity>(
-      polarity_d->value(random->Uniform(polarity_d->value_count()))->number()));
-
-  // Other random parameters.
-  parameters->set_use_phase_saving(random->OneIn(2));
-  parameters->set_random_polarity_ratio(random->OneIn(2) ? 0.01 : 0.0);
-  parameters->set_random_branches_ratio(random->OneIn(2) ? 0.01 : 0.0);
-}
-
 SatSolver::Status SolveWithRandomParameters(LogBehavior log,
                                             const LinearBooleanProblem& problem,
                                             int num_times, SatSolver* solver,
@@ -1159,6 +1140,15 @@ SatSolver::Status MinimizeIntegerVariableWithLinearScan(
     IntegerVariable objective_var,
     const std::function<void(const Model&)>& feasible_solution_observer,
     Model* model) {
+  return MinimizeIntegerVariableWithLinearScanAndLazyEncoding(
+      objective_var, {}, feasible_solution_observer, model);
+}
+
+SatSolver::Status MinimizeIntegerVariableWithLinearScanAndLazyEncoding(
+    IntegerVariable objective_var,
+    const std::vector<IntegerVariable>& var_for_lazy_encoding,
+    const std::function<void(const Model&)>& feasible_solution_observer,
+    Model* model) {
   // Timing.
   WallTimer wall_timer;
   UserTimer user_timer;
@@ -1167,15 +1157,44 @@ SatSolver::Status MinimizeIntegerVariableWithLinearScan(
 
   SatSolver* sat_solver = model->GetOrCreate<SatSolver>();
   IntegerTrail* integer_trail = model->GetOrCreate<IntegerTrail>();
+  IntegerEncoder* encoder = model->GetOrCreate<IntegerEncoder>();
   LOG(INFO) << "#Boolean_variables:" << sat_solver->NumVariables();
 
   // Simple linear scan algorithm to find the optimal.
   SatSolver::Status result;
   bool model_is_feasible = false;
-  int objective;
+  IntegerValue objective;
   while (true) {
     result = sat_solver->Solve();
     if (result != SatSolver::MODEL_SAT) break;
+
+    // Look for an integer variable whose domain is not singleton.
+    // Heuristic: we take the one with minimum lb amongst the given variables.
+    //
+    // TODO(user): consider better heuristics. Maybe we can use some kind of
+    // IntegerVariable activity or something from the CP world.
+    IntegerVariable candidate = kNoIntegerVariable;
+    IntegerValue candidate_lb(0);
+    for (const IntegerVariable i : var_for_lazy_encoding) {
+      // Note that we use < and not != for optional variable whose domain may
+      // be empty.
+      const IntegerValue lb = integer_trail->LowerBound(i);
+      if (lb < integer_trail->UpperBound(i)) {
+        if (candidate == kNoIntegerVariable || lb < candidate_lb) {
+          candidate = i;
+          candidate_lb = lb;
+        }
+      }
+    }
+
+    if (candidate != kNoIntegerVariable) {
+      // This add a literal with good polarity. It is very important that the
+      // decision heuristic assign it to false! Otherwise, our heuristic is not
+      // good.
+      encoder->CreateAssociatedLiteral(
+          IntegerLiteral::GreaterOrEqual(candidate, candidate_lb + 1));
+      continue;
+    }
 
     // The objective is the current lower bound of the objective_var.
     objective = integer_trail->LowerBound(objective_var);
@@ -1186,13 +1205,17 @@ SatSolver::Status MinimizeIntegerVariableWithLinearScan(
 
     // Restrict the objective.
     sat_solver->Backtrack(0);
-    integer_trail->Enqueue(
-        IntegerLiteral::LowerOrEqual(objective_var, objective - 1), {}, {});
+    if (!integer_trail->Enqueue(
+            IntegerLiteral::LowerOrEqual(objective_var, objective - 1), {},
+            {})) {
+      result = SatSolver::MODEL_UNSAT;
+      break;
+    }
   }
 
   // Display summary.
   if (model_is_feasible) {
-    printf("objective: %d\n", objective);
+    printf("objective: %lld\n", static_cast<int64>(objective.value()));
   } else {
     printf("objective: NA\n");
   }

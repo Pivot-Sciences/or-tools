@@ -491,6 +491,10 @@ PY_STRINGIFY_DEBUGSTRING(Decision);
   Constraint* Member(const std::vector<int64>& values) {
     return $self->solver()->MakeMemberCt($self->Var(), values);
   }
+  Constraint* NotMember(const std::vector<int64>& starts,
+                        const std::vector<int64>& ends) {
+    return $self->solver()->MakeNotMemberCt($self, starts, ends);
+  }
 }
 
 // Add arithmetic operators to integer expressions.
@@ -870,6 +874,7 @@ namespace operations_research {
 %rename (NullIntersectExcept) Solver::MakeNullIntersectExcept;
 %rename (Circuit) Solver::MakeCircuit;
 %rename (MemberCt) Solver::MakeMemberCt;
+%rename (NotMemberCt) Solver::MakeNotMemberCt;
 %rename (SubCircuit) Solver::MakeSubCircuit;
 %rename (PathCumul) Solver::MakePathCumul;
 %rename (DelayedPathCumul) Solver::MakeDelayedPathCumul;

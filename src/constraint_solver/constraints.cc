@@ -18,7 +18,6 @@
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/integral_types.h"
 #include "base/logging.h"
 #include "constraint_solver/constraint_solver.h"
@@ -83,6 +82,7 @@ class TrueConstraint : public Constraint {
     visitor->BeginVisitConstraint(ModelVisitor::kTrueConstraint, this);
     visitor->EndVisitConstraint(ModelVisitor::kTrueConstraint, this);
   }
+  IntVar* Var() override { return solver()->MakeIntConst(1); }
 };
 
 class FalseConstraint : public Constraint {
@@ -102,6 +102,7 @@ class FalseConstraint : public Constraint {
     visitor->BeginVisitConstraint(ModelVisitor::kFalseConstraint, this);
     visitor->EndVisitConstraint(ModelVisitor::kFalseConstraint, this);
   }
+  IntVar* Var() override { return solver()->MakeIntConst(0); }
 
  private:
   const std::string explanation_;

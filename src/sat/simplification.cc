@@ -13,15 +13,20 @@
 
 #include "sat/simplification.h"
 
+#include <set>
+
 #include "base/timer.h"
 #include "base/strongly_connected_components.h"
 #include "base/stl_util.h"
 #include "algorithms/dynamic_partition.h"
+#include "sat/util.h"
+#include "base/random.h"
 
 namespace operations_research {
 namespace sat {
 
-SatPostsolver::SatPostsolver(int num_variables) {
+SatPostsolver::SatPostsolver(int num_variables)
+    : initial_num_variables_(num_variables), num_variables_(num_variables) {
   reverse_mapping_.resize(num_variables);
   for (BooleanVariable var(0); var < num_variables; ++var) {
     reverse_mapping_[var] = var;
@@ -40,31 +45,45 @@ void SatPostsolver::Add(Literal x, const std::vector<Literal>& clause) {
 }
 
 void SatPostsolver::FixVariable(Literal x) {
-  Literal l = ApplyReverseMapping(x);
-  CHECK(!assignment_.IsLiteralAssigned(l));
+  const Literal l = ApplyReverseMapping(x);
   assignment_.AssignFromTrueLiteral(l);
 }
 
 void SatPostsolver::ApplyMapping(
     const ITIVector<BooleanVariable, BooleanVariable>& mapping) {
-  ITIVector<BooleanVariable, BooleanVariable> new_mapping(
-      reverse_mapping_.size(), kNoBooleanVariable);
+  ITIVector<BooleanVariable, BooleanVariable> new_mapping;
+  if (reverse_mapping_.size() < mapping.size()) {
+    // We have new variables.
+    while (reverse_mapping_.size() < mapping.size()) {
+      reverse_mapping_.push_back(BooleanVariable(num_variables_++));
+    }
+    assignment_.Resize(num_variables_);
+  }
   for (BooleanVariable v(0); v < mapping.size(); ++v) {
     const BooleanVariable image = mapping[v];
     if (image != kNoBooleanVariable) {
-      CHECK_EQ(new_mapping[image], kNoBooleanVariable);
-      CHECK_LT(v, reverse_mapping_.size());
-      CHECK_NE(reverse_mapping_[v], kNoBooleanVariable);
+      if (image >= new_mapping.size()) {
+        new_mapping.resize(image.value() + 1, kNoBooleanVariable);
+      }
       new_mapping[image] = reverse_mapping_[v];
+      CHECK_NE(new_mapping[image], kNoBooleanVariable);
     }
   }
   std::swap(new_mapping, reverse_mapping_);
 }
 
 Literal SatPostsolver::ApplyReverseMapping(Literal l) {
-  CHECK_LT(l.Variable(), reverse_mapping_.size());
-  CHECK_NE(reverse_mapping_[l.Variable()], kNoBooleanVariable);
-  return Literal(reverse_mapping_[l.Variable()], l.IsPositive());
+  if (l.Variable() >= reverse_mapping_.size()) {
+    // We have new variables.
+    while (l.Variable() >= reverse_mapping_.size()) {
+      reverse_mapping_.push_back(BooleanVariable(num_variables_++));
+    }
+    assignment_.Resize(num_variables_);
+  }
+  DCHECK_NE(reverse_mapping_[l.Variable()], kNoBooleanVariable);
+  const Literal result(reverse_mapping_[l.Variable()], l.IsPositive());
+  CHECK(!assignment_.IsLiteralAssigned(result));
+  return result;
 }
 
 void SatPostsolver::Postsolve(VariablesAssignment* assignment) const {
@@ -94,6 +113,9 @@ void SatPostsolver::Postsolve(VariablesAssignment* assignment) const {
       assignment->AssignFromTrueLiteral(associated_literal_[i]);
     }
   }
+
+  // Ignore the value of any variables added by the presolve.
+  assignment->Resize(initial_num_variables_);
 }
 
 std::vector<bool> SatPostsolver::ExtractAndPostsolveSolution(
@@ -117,7 +139,7 @@ std::vector<bool> SatPostsolver::PostsolveSolution(const std::vector<bool>& solu
   }
   Postsolve(&assignment_);
   std::vector<bool> postsolved_solution;
-  for (int i = 0; i < reverse_mapping_.size(); ++i) {
+  for (int i = 0; i < initial_num_variables_; ++i) {
     postsolved_solution.push_back(
         assignment_.LiteralIsTrue(Literal(BooleanVariable(i), true)));
   }
@@ -144,6 +166,7 @@ void SatPresolver::AddClause(ClauseRef clause) {
       clause_ref[i] = Literal(equiv_mapping_[clause_ref[i].Index()]);
     }
   }
+  const int old_size = clause_ref.size();
   std::sort(clause_ref.begin(), clause_ref.end());
   clause_ref.erase(std::unique(clause_ref.begin(), clause_ref.end()),
                    clause_ref.end());
@@ -160,6 +183,11 @@ void SatPresolver::AddClause(ClauseRef clause) {
     }
   }
 
+  if (drat_writer_ != nullptr && clause_ref.size() < old_size) {
+    drat_writer_->AddClause(ClauseRef(clause_ref));
+    drat_writer_->DeleteClause(clause);
+  }
+
   const Literal max_literal = clause_ref.back();
   const int required_size = std::max(max_literal.Index().value(),
                                      max_literal.NegatedIndex().value()) +
@@ -174,7 +202,18 @@ void SatPresolver::AddClause(ClauseRef clause) {
   }
 }
 
+void SatPresolver::SetNumVariables(int num_variables) {
+  const int required_size = 2 * num_variables;
+  if (required_size > literal_to_clauses_.size()) {
+    literal_to_clauses_.resize(required_size);
+    literal_to_clause_sizes_.resize(required_size);
+  }
+}
+
 void SatPresolver::AddClauseInternal(std::vector<Literal>* clause) {
+  if (drat_writer_ != nullptr) drat_writer_->AddClause(ClauseRef(*clause));
+
+  DCHECK(std::is_sorted(clause->begin(), clause->end()));
   CHECK_GT(clause->size(), 0) << "TODO(fdid): Unsat during presolve?";
   const ClauseIndex ci(clauses_.size());
   clauses_.push_back(std::vector<Literal>());
@@ -184,6 +223,8 @@ void SatPresolver::AddClauseInternal(std::vector<Literal>* clause) {
   for (Literal e : clauses_.back()) {
     literal_to_clauses_[e.Index()].push_back(ci);
     literal_to_clause_sizes_[e.Index()]++;
+    UpdatePriorityQueue(e.Variable());
+    UpdateBvaPriorityQueue(e.Index());
   }
 }
 
@@ -260,9 +301,166 @@ bool SatPresolver::Presolve() {
       if (!ProcessAllClauses()) return false;
     }
   }
-
   DisplayStats(timer.Get());
+
+  // We apply BVA after a pass of the other algorithms.
+  if (parameters_.presolve_use_bva()) {
+    PresolveWithBva();
+    DisplayStats(timer.Get());
+  }
+
   return true;
+}
+
+void SatPresolver::PresolveWithBva() {
+  var_pq_elements_.clear();  // so we don't update it.
+  InitializeBvaPriorityQueue();
+  while (bva_pq_.Size() > 0) {
+    const LiteralIndex lit = bva_pq_.Top()->literal;
+    bva_pq_.Pop();
+    SimpleBva(lit);
+  }
+}
+
+// We use the same notation as in the article mentionned in the .h
+void SatPresolver::SimpleBva(LiteralIndex l) {
+  // We will try to add a literal to m_lit_ and take a subset of m_cls_ such
+  // that |m_lit_| * |m_cls_| - |m_lit_| - |m_cls_| is maximized.
+  m_lit_ = {l};
+  m_cls_ = literal_to_clauses_[l];
+
+  int reduction = 0;
+  while (true) {
+    p_.clear();
+    for (const ClauseIndex c : m_cls_) {
+      const std::vector<Literal>& clause = clauses_[c];
+      if (clause.empty()) continue;  // It has been deleted.
+
+      // Find a literal different from l that occur in the less number of
+      // clauses.
+      const LiteralIndex l_min =
+          FindLiteralWithShortestOccurenceListExcluding(clause, Literal(l));
+      if (l_min == kNoLiteralIndex) continue;
+
+      // Find all the clauses of the form "clause \ {l} + {l'}", for a literal
+      // l' that is not in the clause.
+      for (const ClauseIndex d : literal_to_clauses_[l_min]) {
+        if (clause.size() != clauses_[d].size()) continue;
+        const LiteralIndex l_diff =
+            DifferAtGivenLiteral(clause, clauses_[d], Literal(l));
+        if (l_diff == kNoLiteralIndex || m_lit_.count(l_diff) > 0) continue;
+        if (l_diff == Literal(l).NegatedIndex()) {
+          // Self-subsumbtion!
+          //
+          // TODO(user): Not sure this can happen after the presolve we did
+          // before calling SimpleBva().
+          VLOG(1) << "self-subsumbtion";
+        }
+
+        DCHECK(p_[l_diff].empty() || p_[l_diff].back() != c);
+        p_[l_diff].push_back(c);
+      }
+    }
+
+    LiteralIndex lmax = kNoLiteralIndex;
+    int max_size = 0;
+    for (const auto& entry : p_) {
+      if (entry.second.size() > max_size) {
+        lmax = entry.first;
+        max_size = entry.second.size();
+      }
+    }
+    if (lmax == kNoLiteralIndex) break;
+    const int new_m_lit_size = m_lit_.size() + 1;
+    const int new_m_cls_size = p_[lmax].size();
+    const int new_reduction =
+        new_m_lit_size * new_m_cls_size - new_m_cls_size - new_m_lit_size;
+    if (new_reduction <= reduction) break;
+    CHECK_NE(1, new_m_lit_size);
+    CHECK_NE(1, new_m_cls_size);
+
+    // TODO(user): Instead of looping and recomputing p_ again, we can instead
+    // simply intersect the clause indices in p_. This should be a lot faster.
+    // That said, we loop again only when we have a reduction, so this happens
+    // not that often compared to the initial computation of p.
+    reduction = new_reduction;
+    m_lit_.insert(lmax);
+    m_cls_ = p_[lmax];
+  }
+
+  // A strictly positive reduction means that applying the BVA transform will
+  // reduce the overall number of clauses by that much. Here we can control
+  // what kind of reduction we want to apply.
+  if (reduction <= parameters_.presolve_bva_threshold()) return;
+  CHECK_GT(m_lit_.size(), 1);
+
+  // Create a new variable.
+  const int old_size = literal_to_clauses_.size();
+  const LiteralIndex x_true = LiteralIndex(old_size);
+  const LiteralIndex x_false = LiteralIndex(old_size + 1);
+  literal_to_clauses_.resize(old_size + 2);
+  literal_to_clause_sizes_.resize(old_size + 2);
+  bva_pq_elements_.resize(old_size + 2);
+  bva_pq_elements_[x_true.value()].literal = x_true;
+  bva_pq_elements_[x_false.value()].literal = x_false;
+
+  // Add the new clauses.
+  if (drat_writer_ != nullptr) drat_writer_->AddOneVariable();
+  for (const LiteralIndex lit : m_lit_) {
+    tmp_new_clause_ = {Literal(lit), Literal(x_true)};
+    AddClauseInternal(&tmp_new_clause_);
+  }
+  for (const ClauseIndex ci : m_cls_) {
+    tmp_new_clause_ = clauses_[ci];
+    CHECK(!tmp_new_clause_.empty());
+    for (Literal& ref : tmp_new_clause_) {
+      if (ref.Index() == l) {
+        ref = Literal(x_false);
+        break;
+      }
+    }
+
+    // TODO(user): we can be more efficient here since the clause used to
+    // derive this one is already sorted. We just need to insert x_false in
+    // the correct place and remove l.
+    std::sort(tmp_new_clause_.begin(), tmp_new_clause_.end());
+    AddClauseInternal(&tmp_new_clause_);
+  }
+
+  // Delete the old clauses.
+  //
+  // TODO(user): do that more efficiently? we can simply store the clause d
+  // instead of finding it again. That said, this is executed only when a
+  // reduction occur, whereas the start of this function occur all the time, so
+  // we want it to be as fast as possible.
+  for (const ClauseIndex c : m_cls_) {
+    const std::vector<Literal>& clause = clauses_[c];
+    CHECK(!clause.empty());
+    const LiteralIndex l_min =
+        FindLiteralWithShortestOccurenceListExcluding(clause, Literal(l));
+    for (const LiteralIndex lit : m_lit_) {
+      if (lit == l) continue;
+      for (const ClauseIndex d : literal_to_clauses_[l_min]) {
+        if (clause.size() != clauses_[d].size()) continue;
+        const LiteralIndex l_diff =
+            DifferAtGivenLiteral(clause, clauses_[d], Literal(l));
+        if (l_diff == lit) {
+          Remove(d);
+          break;
+        }
+      }
+    }
+    Remove(c);
+  }
+
+  // Add these elements to the priority queue.
+  //
+  // TODO(user): It seems some of the element already processed could benefit
+  // from being processed again by SimpleBva(). It is unclear if it is worth the
+  // extra time though.
+  AddToBvaPriorityQueue(x_true);
+  AddToBvaPriorityQueue(x_false);
+  AddToBvaPriorityQueue(l);
 }
 
 // TODO(user): Binary clauses are really common, and we can probably do this
@@ -294,6 +492,11 @@ bool SatPresolver::ProcessClauseToSimplifyOthers(ClauseIndex clause_index) {
         } else {
           CHECK_NE(opposite_literal, lit.Index());
           if (clauses_[ci].empty()) return false;  // UNSAT.
+          if (drat_writer_ != nullptr) {
+            // TODO(user): remove the old clauses_[ci] afterwards.
+            drat_writer_->AddClause(ClauseRef(clauses_[ci]));
+          }
+
           // Remove ci from the occurence list. Note that the occurence list
           // can't be shortest_list or its negation.
           auto iter =
@@ -334,6 +537,10 @@ bool SatPresolver::ProcessClauseToSimplifyOthers(ClauseIndex clause_index) {
       if (SimplifyClause(clause, &clauses_[ci], &opposite_literal)) {
         CHECK_EQ(opposite_literal, lit.NegatedIndex());
         if (clauses_[ci].empty()) return false;  // UNSAT.
+        if (drat_writer_ != nullptr) {
+          // TODO(user): remove the old clauses_[ci] afterwards.
+          drat_writer_->AddClause(ClauseRef(clauses_[ci]));
+        }
         if (!in_clause_to_process_[ci]) {
           in_clause_to_process_[ci] = true;
           clause_to_process_.push_back(ci);
@@ -455,17 +662,18 @@ void SatPresolver::Remove(ClauseIndex ci) {
   for (Literal e : clauses_[ci]) {
     literal_to_clause_sizes_[e.Index()]--;
     UpdatePriorityQueue(e.Variable());
+    UpdateBvaPriorityQueue(Literal(e.Variable(), true).Index());
+    UpdateBvaPriorityQueue(Literal(e.Variable(), false).Index());
+  }
+  if (drat_writer_ != nullptr) {
+    drat_writer_->DeleteClause(ClauseRef(clauses_[ci]));
   }
   STLClearObject(&clauses_[ci]);
 }
 
 void SatPresolver::RemoveAndRegisterForPostsolve(ClauseIndex ci, Literal x) {
-  for (Literal e : clauses_[ci]) {
-    literal_to_clause_sizes_[e.Index()]--;
-    UpdatePriorityQueue(e.Variable());
-  }
   postsolver_->Add(x, clauses_[ci]);
-  STLClearObject(&clauses_[ci]);
+  Remove(ci);
 }
 
 Literal SatPresolver::FindLiteralWithShortestOccurenceList(
@@ -476,6 +684,21 @@ Literal SatPresolver::FindLiteralWithShortestOccurenceList(
     if (literal_to_clause_sizes_[l.Index()] <
         literal_to_clause_sizes_[result.Index()]) {
       result = l;
+    }
+  }
+  return result;
+}
+
+LiteralIndex SatPresolver::FindLiteralWithShortestOccurenceListExcluding(
+    const std::vector<Literal>& clause, Literal to_exclude) {
+  CHECK(!clause.empty());
+  LiteralIndex result = kNoLiteralIndex;
+  int num_occurences = std::numeric_limits<int>::max();
+  for (const Literal l : clause) {
+    if (l == to_exclude) continue;
+    if (literal_to_clause_sizes_[l.Index()] < num_occurences) {
+      result = l.Index();
+      num_occurences = literal_to_clause_sizes_[l.Index()];
     }
   }
   return result;
@@ -502,6 +725,40 @@ void SatPresolver::InitializePriorityQueue() {
     element->weight = literal_to_clause_sizes_[Literal(var, true).Index()] +
                       literal_to_clause_sizes_[Literal(var, false).Index()];
     var_pq_.Add(element);
+  }
+}
+
+void SatPresolver::UpdateBvaPriorityQueue(LiteralIndex lit) {
+  if (bva_pq_elements_.empty()) return;  // not initialized.
+  CHECK_LT(lit, bva_pq_elements_.size());
+  BvaPqElement* element = &bva_pq_elements_[lit.value()];
+  element->weight = literal_to_clause_sizes_[lit];
+  if (bva_pq_.Contains(element)) {
+    bva_pq_.NoteChangedPriority(element);
+  }
+}
+
+void SatPresolver::AddToBvaPriorityQueue(LiteralIndex lit) {
+  if (bva_pq_elements_.empty()) return;  // not initialized.
+  CHECK_LT(lit, bva_pq_elements_.size());
+  BvaPqElement* element = &bva_pq_elements_[lit.value()];
+  element->weight = literal_to_clause_sizes_[lit];
+  CHECK(!bva_pq_.Contains(element));
+  if (element->weight > 2) bva_pq_.Add(element);
+}
+
+void SatPresolver::InitializeBvaPriorityQueue() {
+  const int num_literals = 2 * NumVariables();
+  bva_pq_.Clear();
+  bva_pq_elements_.assign(num_literals, BvaPqElement());
+  for (LiteralIndex lit(0); lit < num_literals; ++lit) {
+    BvaPqElement* element = &bva_pq_elements_[lit.value()];
+    element->literal = lit;
+    element->weight = literal_to_clause_sizes_[lit];
+
+    // If a literal occur only in two clauses, then there is no point calling
+    // SimpleBva() on it.
+    if (element->weight > 2) bva_pq_.Add(element);
   }
 }
 
@@ -579,6 +836,40 @@ bool SimplifyClause(const std::vector<Literal>& a, std::vector<Literal>* b,
     b->erase(to_remove);
   }
   return true;
+}
+
+LiteralIndex DifferAtGivenLiteral(const std::vector<Literal>& a,
+                                  const std::vector<Literal>& b, Literal l) {
+  DCHECK_EQ(b.size(), a.size());
+  DCHECK(std::is_sorted(a.begin(), a.end()));
+  DCHECK(std::is_sorted(b.begin(), b.end()));
+  LiteralIndex result = kNoLiteralIndex;
+  std::vector<Literal>::const_iterator ia = a.begin();
+  std::vector<Literal>::const_iterator ib = b.begin();
+  while (ia != a.end() && ib != b.end()) {
+    if (*ia == *ib) {  // Same literal.
+      ++ia;
+      ++ib;
+    } else if (*ia < *ib) {
+      // A literal of a is not in b, it must be l.
+      // Note that this can only happen once.
+      if (*ia != l) return kNoLiteralIndex;
+      ++ia;
+    } else {
+      // A literal of b is not in a, save it.
+      // We abort if this happen twice.
+      if (result != kNoLiteralIndex) return kNoLiteralIndex;
+      result = (*ib).Index();
+      ++ib;
+    }
+  }
+  // Check the corner case of the difference at the end.
+  if (ia != a.end() && *ia != l) return kNoLiteralIndex;
+  if (ib != b.end()) {
+    if (result != kNoLiteralIndex) return kNoLiteralIndex;
+    result = (*ib).Index();
+  }
+  return result;
 }
 
 bool ComputeResolvant(Literal x, const std::vector<Literal>& a,
@@ -697,7 +988,7 @@ class PropagationGraph {
 };
 
 void ProbeAndFindEquivalentLiteral(
-    SatSolver* solver, SatPostsolver* postsolver,
+    SatSolver* solver, SatPostsolver* postsolver, DratWriter* drat_writer,
     ITIVector<LiteralIndex, LiteralIndex>* mapping) {
   solver->Backtrack(0);
   mapping->clear();
@@ -755,6 +1046,13 @@ void ProbeAndFindEquivalentLiteral(
         solver->AddUnitClause(assignment.LiteralIsTrue(Literal(i))
                                   ? Literal(rep)
                                   : Literal(rep).Negated());
+        if (drat_writer != nullptr) {
+          temp.clear();
+          temp.push_back(assignment.LiteralIsTrue(Literal(i))
+                             ? Literal(rep)
+                             : Literal(rep).Negated());
+          drat_writer->AddClause(ClauseRef(temp));
+        }
       }
     }
 
@@ -764,8 +1062,15 @@ void ProbeAndFindEquivalentLiteral(
       if (assignment.IsLiteralAssigned(Literal(rep))) {
         if (!assignment.IsLiteralAssigned(Literal(i))) {
           solver->AddUnitClause(assignment.LiteralIsTrue(Literal(rep))
-                                    ? Literal(Literal(i))
+                                    ? Literal(i)
                                     : Literal(i).Negated());
+          if (drat_writer != nullptr) {
+            temp.clear();
+            temp.push_back(assignment.LiteralIsTrue(Literal(rep))
+                               ? Literal(i)
+                               : Literal(i).Negated());
+            drat_writer->AddClause(ClauseRef(temp));
+          }
         }
       } else if (rep != i) {
         CHECK(!solver->Assignment().IsLiteralAssigned(Literal(i)));
@@ -775,6 +1080,7 @@ void ProbeAndFindEquivalentLiteral(
         temp.push_back(Literal(i));
         temp.push_back(Literal(rep).Negated());
         postsolver->Add(Literal(i), temp);
+        if (drat_writer != nullptr) drat_writer->AddClause(ClauseRef(temp));
       }
     }
   }
@@ -783,6 +1089,128 @@ void ProbeAndFindEquivalentLiteral(
             << solver->LiteralTrail().Index() - num_already_fixed_vars
             << " equiv " << num_equiv / 2 << " total "
             << solver->NumVariables();
+}
+
+SatSolver::Status SolveWithPresolve(std::unique_ptr<SatSolver>* solver,
+                                    std::vector<bool>* solution,
+                                    DratWriter* drat_writer) {
+  // We save the initial parameters.
+  const SatParameters parameters = (*solver)->parameters();
+  std::unique_ptr<TimeLimit> time_limit = TimeLimit::FromParameters(parameters);
+  SatPostsolver postsolver((*solver)->NumVariables());
+
+  // Some problems are formulated in such a way that our SAT heuristics
+  // simply works without conflict. Get them out of the way first because it
+  // is possible that the presolve lose this "lucky" ordering. This is in
+  // particular the case on the SAT14.crafted.complete-xxx-... problems.
+  {
+    MTRandom random("A random seed.");
+    SatParameters new_params = parameters;
+    new_params.set_log_search_progress(false);
+    new_params.set_max_number_of_conflicts(1);
+    const int num_times = 1000;
+    for (int i = 0; i < num_times && !time_limit->LimitReached(); ++i) {
+      (*solver)->SetParameters(new_params);
+      const SatSolver::Status result =
+          (*solver)->SolveWithTimeLimit(time_limit.get());
+      if (result != SatSolver::LIMIT_REACHED) {
+        if (result == SatSolver::MODEL_SAT) {
+          LOG(INFO) << "Problem solved by trivial heuristic!";
+          solution->clear();
+          for (int i = 0; i < (*solver)->NumVariables(); ++i) {
+            solution->push_back((*solver)->Assignment().LiteralIsTrue(
+                Literal(BooleanVariable(i), true)));
+          }
+        }
+        return result;
+      }
+
+      // We randomize at the end so that the default params is executed
+      // at least once.
+      (*solver)->RestoreSolverToAssumptionLevel();
+      if ((*solver)->IsModelUnsat()) {
+        LOG(INFO) << "UNSAT during random decision heuritics.";
+        return SatSolver::MODEL_UNSAT;
+      }
+
+      RandomizeDecisionHeuristic(&random, &new_params);
+      new_params.set_random_seed(i);
+      (*solver)->SetParameters(new_params);
+      (*solver)->ResetDecisionHeuristic();
+    }
+
+    // Restore the initial parameters.
+    (*solver)->SetParameters(parameters);
+    (*solver)->ResetDecisionHeuristic();
+  }
+
+  // We use a new block so the memory used by the presolver can be
+  // reclaimed as soon as it is no longer needed.
+  const int max_num_passes = 4;
+  for (int i = 0; i < max_num_passes && !time_limit->LimitReached(); ++i) {
+    const int saved_num_variables = (*solver)->NumVariables();
+
+    // Probe + find equivalent literals.
+    // TODO(user): Use a derived time limit in the probing phase.
+    ITIVector<LiteralIndex, LiteralIndex> equiv_map;
+    ProbeAndFindEquivalentLiteral((*solver).get(), &postsolver, drat_writer,
+                                  &equiv_map);
+    if ((*solver)->IsModelUnsat()) {
+      LOG(INFO) << "UNSAT during probing.";
+      return SatSolver::MODEL_UNSAT;
+    }
+
+    // The rest of the presolve only work on pure SAT problem.
+    if (!(*solver)->ProblemIsPureSat()) {
+      LOG(INFO) << "The problem is not a pure SAT problem, skipping the SAT "
+                   "specific presolve.";
+      break;
+    }
+
+    // Register the fixed variables with the presolver.
+    // TODO(user): Find a better place for this?
+    (*solver)->Backtrack(0);
+    for (int i = 0; i < (*solver)->LiteralTrail().Index(); ++i) {
+      postsolver.FixVariable((*solver)->LiteralTrail()[i]);
+    }
+
+    // TODO(user): Pass the time_limit to the presolver.
+    SatPresolver presolver(&postsolver);
+    presolver.SetParameters(parameters);
+    presolver.SetDratWriter(drat_writer);
+    presolver.SetEquivalentLiteralMapping(equiv_map);
+    (*solver)->ExtractClauses(&presolver);
+    (*solver).release();
+    if (!presolver.Presolve()) {
+      LOG(INFO) << "UNSAT during presolve.";
+
+      // This is just here to reset the SatSolver::Solve() satistics.
+      (*solver).reset(new SatSolver());
+      return SatSolver::MODEL_UNSAT;
+    }
+
+    postsolver.ApplyMapping(presolver.VariableMapping());
+    if (drat_writer != nullptr) {
+      drat_writer->ApplyMapping(presolver.VariableMapping());
+    }
+
+    // Load the presolved problem in a new solver.
+    (*solver).reset(new SatSolver());
+    (*solver)->SetDratWriter(drat_writer);
+    (*solver)->SetParameters(parameters);
+    presolver.LoadProblemIntoSatSolver((*solver).get());
+
+    // Stop if a fixed point has been reached.
+    if ((*solver)->NumVariables() == saved_num_variables) break;
+  }
+
+  // Solve.
+  const SatSolver::Status result =
+      (*solver)->SolveWithTimeLimit(time_limit.get());
+  if (result == SatSolver::MODEL_SAT) {
+    *solution = postsolver.ExtractAndPostsolveSolution(**solver);
+  }
+  return result;
 }
 
 }  // namespace sat

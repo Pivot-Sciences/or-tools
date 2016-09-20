@@ -16,6 +16,7 @@
 #include "base/hash.h"
 #include "base/hash.h"
 #include <iterator>
+#include <map>
 #include <memory>
 #include <numeric>
 #include <set>
@@ -331,7 +332,7 @@ class DecrementValue : public ChangeValue {
 PathOperator::PathOperator(const std::vector<IntVar*>& next_vars,
                            const std::vector<IntVar*>& path_vars,
                            int number_of_base_nodes,
-                           ResultCallback1<int, int64>* start_empty_path_class)
+                           std::function<int(int64)> start_empty_path_class)
     : IntVarLocalSearchOperator(next_vars),
       number_of_nexts_(next_vars.size()),
       ignore_path_vars_(path_vars.empty()),
@@ -340,7 +341,7 @@ PathOperator::PathOperator(const std::vector<IntVar*>& next_vars,
       base_paths_(number_of_base_nodes),
       just_started_(false),
       first_start_(true),
-      start_empty_path_class_(start_empty_path_class) {
+      start_empty_path_class_(std::move(start_empty_path_class)) {
   if (!ignore_path_vars_) {
     AddVars(path_vars);
   }
@@ -508,12 +509,14 @@ bool PathOperator::IncrementPosition() {
 void PathOperator::InitializePathStarts() {
   // Detect nodes which do not have any possible predecessor in a path; these
   // nodes are path starts.
+  int max_next = -1;
   std::vector<bool> has_prevs(number_of_nexts_, false);
   for (int i = 0; i < number_of_nexts_; ++i) {
     const int next = OldNext(i);
     if (next < number_of_nexts_) {
       has_prevs[next] = true;
     }
+    max_next = std::max(max_next, next);
   }
   // Create a list of path starts, dropping equivalent path starts of
   // currently empty paths.
@@ -525,40 +528,65 @@ void PathOperator::InitializePathStarts() {
     if (!has_prevs[i]) {
       if (use_empty_path_symmetry_breaker && IsPathEnd(OldNext(i))) {
         if (start_empty_path_class_ != nullptr) {
-          if (empty_found[start_empty_path_class_->Run(i)]) {
+          if (empty_found[start_empty_path_class_(i)]) {
             continue;
           } else {
-            empty_found[start_empty_path_class_->Run(i)] = true;
+            empty_found[start_empty_path_class_(i)] = true;
           }
         }
       }
       new_path_starts.push_back(i);
     }
   }
-  // Re-adjust current base_nodes and base_paths to take into account new
-  // path starts (there could be fewer if a new path was made empty, or more
-  // if nodes were added to a formerly empty path).
-  int new_index = 0;
-  hash_set<int> found_bases;
-  for (int i = 0; i < path_starts_.size(); ++i) {
-    int index = new_index;
-    while (index < new_path_starts.size() &&
-           new_path_starts[index] < path_starts_[i]) {
-      ++index;
-    }
-    const bool found = (index < new_path_starts.size() &&
-                        new_path_starts[index] == path_starts_[i]);
-    if (found) {
-      new_index = index;
+  if (!first_start_) {
+    // Synchronizing base_paths_ with base node positions. When the last move
+    // was performed a base node could have been moved to a new route in which
+    // case base_paths_ needs to be updated. This needs to be done on the path
+    // starts before we re-adjust base nodes for new path starts.
+    std::vector<int> node_paths(max_next + 1, -1);
+    for (int i = 0; i < path_starts_.size(); ++i) {
+      int node = path_starts_[i];
+      while (!IsPathEnd(node)) {
+        node_paths[node] = i;
+        node = OldNext(node);
+      }
+      node_paths[node] = i;
     }
     for (int j = 0; j < base_nodes_.size(); ++j) {
-      if (base_paths_[j] == i && !ContainsKey(found_bases, j)) {
-        found_bases.insert(j);
-        base_paths_[j] = new_index;
-        // If the current position of the base node is a removed empty path,
-        // readjusting it to the last visited path start.
-        if (!found) {
-          base_nodes_[j] = new_path_starts[new_index];
+      if (IsInactive(base_nodes_[j]) || node_paths[base_nodes_[j]] == -1) {
+        // Base node was made inactive or was moved to a new path, reposition
+        // the base node to the start of the path on which it was.
+        base_nodes_[j] = path_starts_[base_paths_[j]];
+      } else {
+        base_paths_[j] = node_paths[base_nodes_[j]];
+      }
+    }
+    // Re-adjust current base_nodes and base_paths to take into account new
+    // path starts (there could be fewer if a new path was made empty, or more
+    // if nodes were added to a formerly empty path).
+    int new_index = 0;
+    hash_set<int> found_bases;
+    for (int i = 0; i < path_starts_.size(); ++i) {
+      int index = new_index;
+      // Note: old and new path starts are sorted by construction.
+      while (index < new_path_starts.size() &&
+             new_path_starts[index] < path_starts_[i]) {
+        ++index;
+      }
+      const bool found = (index < new_path_starts.size() &&
+                          new_path_starts[index] == path_starts_[i]);
+      if (found) {
+        new_index = index;
+      }
+      for (int j = 0; j < base_nodes_.size(); ++j) {
+        if (base_paths_[j] == i && !ContainsKey(found_bases, j)) {
+          found_bases.insert(j);
+          base_paths_[j] = new_index;
+          // If the current position of the base node is a removed empty path,
+          // readjusting it to the last visited path start.
+          if (!found) {
+            base_nodes_[j] = new_path_starts[new_index];
+          }
         }
       }
     }
@@ -574,8 +602,9 @@ void PathOperator::InitializeInactives() {
 }
 
 void PathOperator::InitializeBaseNodes() {
-  InitializePathStarts();
+  // Inactive nodes must be detected before determining new path starts.
   InitializeInactives();
+  InitializePathStarts();
   if (first_start_ || InitPosition()) {
     // Only do this once since the following starts will continue from the
     // preceding position
@@ -602,6 +631,7 @@ void PathOperator::InitializeBaseNodes() {
       const int64 base_node = base_nodes_[i - 1];
       base_nodes_[i] = base_node;
       end_nodes_[i] = base_node;
+      base_paths_[i] = base_paths_[i - 1];
     }
   }
   just_started_ = true;
@@ -663,8 +693,9 @@ bool PathOperator::CheckChainValidity(int64 before_chain, int64 chain_end,
 class TwoOpt : public PathOperator {
  public:
   TwoOpt(const std::vector<IntVar*>& vars, const std::vector<IntVar*>& secondary_vars,
-         ResultCallback1<int, int64>* start_empty_path_class)
-      : PathOperator(vars, secondary_vars, 2, start_empty_path_class),
+         std::function<int(int64)> start_empty_path_class)
+      : PathOperator(vars, secondary_vars, 2,
+                     std::move(start_empty_path_class)),
         last_base_(-1),
         last_(-1) {}
   ~TwoOpt() override {}
@@ -731,17 +762,24 @@ bool TwoOpt::MakeNeighbor() {
 class Relocate : public PathOperator {
  public:
   Relocate(const std::vector<IntVar*>& vars, const std::vector<IntVar*>& secondary_vars,
-           ResultCallback1<int, int64>* start_empty_path_class,
+           const std::string& name, std::function<int(int64)> start_empty_path_class,
            int64 chain_length = 1LL, bool single_path = false)
-      : PathOperator(vars, secondary_vars, 2, start_empty_path_class),
+      : PathOperator(vars, secondary_vars, 2,
+                     std::move(start_empty_path_class)),
         chain_length_(chain_length),
-        single_path_(single_path) {
+        single_path_(single_path),
+        name_(name) {
     CHECK_GT(chain_length_, 0);
   }
+  Relocate(const std::vector<IntVar*>& vars, const std::vector<IntVar*>& secondary_vars,
+           std::function<int(int64)> start_empty_path_class,
+           int64 chain_length = 1LL, bool single_path = false)
+      : Relocate(vars, secondary_vars, StrCat("Relocate<", chain_length, ">"),
+                 start_empty_path_class, chain_length, single_path) {}
   ~Relocate() override {}
   bool MakeNeighbor() override;
 
-  std::string DebugString() const override { return "Relocate"; }
+  std::string DebugString() const override { return name_; }
 
  protected:
   bool OnSamePathAsPreviousBase(int64 base_index) override {
@@ -753,6 +791,7 @@ class Relocate : public PathOperator {
  private:
   const int64 chain_length_;
   const bool single_path_;
+  const std::string name_;
 };
 
 bool Relocate::MakeNeighbor() {
@@ -782,8 +821,9 @@ bool Relocate::MakeNeighbor() {
 class Exchange : public PathOperator {
  public:
   Exchange(const std::vector<IntVar*>& vars, const std::vector<IntVar*>& secondary_vars,
-           ResultCallback1<int, int64>* start_empty_path_class)
-      : PathOperator(vars, secondary_vars, 2, start_empty_path_class) {}
+           std::function<int(int64)> start_empty_path_class)
+      : PathOperator(vars, secondary_vars, 2,
+                     std::move(start_empty_path_class)) {}
   ~Exchange() override {}
   bool MakeNeighbor() override;
 
@@ -823,8 +863,9 @@ bool Exchange::MakeNeighbor() {
 class Cross : public PathOperator {
  public:
   Cross(const std::vector<IntVar*>& vars, const std::vector<IntVar*>& secondary_vars,
-        ResultCallback1<int, int64>* start_empty_path_class)
-      : PathOperator(vars, secondary_vars, 2, start_empty_path_class) {}
+        std::function<int(int64)> start_empty_path_class)
+      : PathOperator(vars, secondary_vars, 2,
+                     std::move(start_empty_path_class)) {}
   ~Cross() override {}
   bool MakeNeighbor() override;
 
@@ -857,9 +898,9 @@ class BaseInactiveNodeToPathOperator : public PathOperator {
   BaseInactiveNodeToPathOperator(
       const std::vector<IntVar*>& vars, const std::vector<IntVar*>& secondary_vars,
       int number_of_base_nodes,
-      ResultCallback1<int, int64>* start_empty_path_class)
+      std::function<int(int64)> start_empty_path_class)
       : PathOperator(vars, secondary_vars, number_of_base_nodes,
-                     start_empty_path_class),
+                     std::move(start_empty_path_class)),
         inactive_node_(0) {}
   ~BaseInactiveNodeToPathOperator() override {}
 
@@ -908,9 +949,9 @@ class MakeActiveOperator : public BaseInactiveNodeToPathOperator {
  public:
   MakeActiveOperator(const std::vector<IntVar*>& vars,
                      const std::vector<IntVar*>& secondary_vars,
-                     ResultCallback1<int, int64>* start_empty_path_class)
+                     std::function<int(int64)> start_empty_path_class)
       : BaseInactiveNodeToPathOperator(vars, secondary_vars, 1,
-                                       start_empty_path_class) {}
+                                       std::move(start_empty_path_class)) {}
   ~MakeActiveOperator() override {}
   bool MakeNeighbor() override;
 
@@ -931,9 +972,9 @@ class MakeActiveAndRelocate : public BaseInactiveNodeToPathOperator {
  public:
   MakeActiveAndRelocate(const std::vector<IntVar*>& vars,
                         const std::vector<IntVar*>& secondary_vars,
-                        ResultCallback1<int, int64>* start_empty_path_class)
+                        std::function<int(int64)> start_empty_path_class)
       : BaseInactiveNodeToPathOperator(vars, secondary_vars, 2,
-                                       start_empty_path_class) {}
+                                       std::move(start_empty_path_class)) {}
   ~MakeActiveAndRelocate() override {}
   bool MakeNeighbor() override;
 
@@ -965,8 +1006,9 @@ class MakeInactiveOperator : public PathOperator {
  public:
   MakeInactiveOperator(const std::vector<IntVar*>& vars,
                        const std::vector<IntVar*>& secondary_vars,
-                       ResultCallback1<int, int64>* start_empty_path_class)
-      : PathOperator(vars, secondary_vars, 1, start_empty_path_class) {}
+                       std::function<int(int64)> start_empty_path_class)
+      : PathOperator(vars, secondary_vars, 1,
+                     std::move(start_empty_path_class)) {}
   ~MakeInactiveOperator() override {}
   bool MakeNeighbor() override {
     const int64 base = BaseNode(0);
@@ -992,8 +1034,9 @@ class MakeChainInactiveOperator : public PathOperator {
  public:
   MakeChainInactiveOperator(const std::vector<IntVar*>& vars,
                             const std::vector<IntVar*>& secondary_vars,
-                            ResultCallback1<int, int64>* start_empty_path_class)
-      : PathOperator(vars, secondary_vars, 2, start_empty_path_class) {}
+                            std::function<int(int64)> start_empty_path_class)
+      : PathOperator(vars, secondary_vars, 2,
+                     std::move(start_empty_path_class)) {}
   ~MakeChainInactiveOperator() override {}
   bool MakeNeighbor() override {
     return MakeChainInactive(BaseNode(0), BaseNode(1));
@@ -1030,9 +1073,9 @@ class SwapActiveOperator : public BaseInactiveNodeToPathOperator {
  public:
   SwapActiveOperator(const std::vector<IntVar*>& vars,
                      const std::vector<IntVar*>& secondary_vars,
-                     ResultCallback1<int, int64>* start_empty_path_class)
+                     std::function<int(int64)> start_empty_path_class)
       : BaseInactiveNodeToPathOperator(vars, secondary_vars, 1,
-                                       start_empty_path_class) {}
+                                       std::move(start_empty_path_class)) {}
   ~SwapActiveOperator() override {}
   bool MakeNeighbor() override;
 
@@ -1063,11 +1106,11 @@ bool SwapActiveOperator::MakeNeighbor() {
 
 class ExtendedSwapActiveOperator : public BaseInactiveNodeToPathOperator {
  public:
-  ExtendedSwapActiveOperator(
-      const std::vector<IntVar*>& vars, const std::vector<IntVar*>& secondary_vars,
-      ResultCallback1<int, int64>* start_empty_path_class)
+  ExtendedSwapActiveOperator(const std::vector<IntVar*>& vars,
+                             const std::vector<IntVar*>& secondary_vars,
+                             std::function<int(int64)> start_empty_path_class)
       : BaseInactiveNodeToPathOperator(vars, secondary_vars, 2,
-                                       start_empty_path_class) {}
+                                       std::move(start_empty_path_class)) {}
   ~ExtendedSwapActiveOperator() override {}
   bool MakeNeighbor() override;
 
@@ -1622,7 +1665,9 @@ class CompoundOperator : public LocalSearchOperator {
   void Start(const Assignment* assignment) override;
   bool MakeNextNeighbor(Assignment* delta, Assignment* deltadelta) override;
 
-  std::string DebugString() const override { return "CompoundOperator"; }
+  std::string DebugString() const override {
+    return operators_[operator_indices_[index_]]->DebugString();
+  }
 
  private:
   class OperatorComparator {
@@ -1799,18 +1844,19 @@ template <class T>
 LocalSearchOperator* MakeLocalSearchOperator(
     Solver* solver, const std::vector<IntVar*>& vars,
     const std::vector<IntVar*>& secondary_vars,
-    ResultCallback1<int, int64>* start_empty_path_class) {
-  return solver->RevAlloc(new T(vars, secondary_vars, start_empty_path_class));
+    std::function<int(int64)> start_empty_path_class) {
+  return solver->RevAlloc(
+      new T(vars, secondary_vars, std::move(start_empty_path_class)));
 }
 
-#define MAKE_LOCAL_SEARCH_OPERATOR(OperatorClass)                         \
-  template <>                                                             \
-  LocalSearchOperator* MakeLocalSearchOperator<OperatorClass>(            \
-      Solver * solver, const std::vector<IntVar*>& vars,                       \
-      const std::vector<IntVar*>& secondary_vars,                              \
-      ResultCallback1<int, int64>* start_empty_path_class) {              \
-    return solver->RevAlloc(                                              \
-        new OperatorClass(vars, secondary_vars, start_empty_path_class)); \
+#define MAKE_LOCAL_SEARCH_OPERATOR(OperatorClass)                  \
+  template <>                                                      \
+  LocalSearchOperator* MakeLocalSearchOperator<OperatorClass>(     \
+      Solver * solver, const std::vector<IntVar*>& vars,                \
+      const std::vector<IntVar*>& secondary_vars,                       \
+      std::function<int(int64)> start_empty_path_class) {          \
+    return solver->RevAlloc(new OperatorClass(                     \
+        vars, secondary_vars, std::move(start_empty_path_class))); \
   }
 
 MAKE_LOCAL_SEARCH_OPERATOR(TwoOpt)
@@ -1843,8 +1889,8 @@ LocalSearchOperator* Solver::MakeOperator(const std::vector<IntVar*>& vars,
     case Solver::OROPT: {
       std::vector<LocalSearchOperator*> operators;
       for (int i = 1; i < 4; ++i) {
-        operators.push_back(
-            RevAlloc(new Relocate(vars, secondary_vars, nullptr, i, true)));
+        operators.push_back(RevAlloc(
+            new Relocate(vars, secondary_vars, "OrOpt", nullptr, i, true)));
       }
       result = ConcatenateOperators(operators);
       break;
@@ -2457,6 +2503,118 @@ LocalSearchFilter* Solver::MakeLocalSearchObjectiveFilter(
 #undef ReturnObjectiveFilter6
 #undef ReturnObjectiveFilter5
 
+// ----- LocalSearchProfiler -----
+
+class LocalSearchProfiler : public LocalSearchMonitor {
+ public:
+  explicit LocalSearchProfiler(Solver* solver) : LocalSearchMonitor(solver) {}
+  void RestartSearch() override { operator_stats_.clear(); }
+  void ExitSearch() override {
+    // Update times for current operator when the search ends.
+    if (solver()->TopLevelSearch() == solver()->ActiveSearch()) {
+      UpdateTime();
+    }
+  }
+  std::string PrintOverview() const {
+    size_t op_name_size = 0;
+    for (const auto& stat : operator_stats_) {
+      op_name_size = std::max(op_name_size, stat.first.length());
+    }
+    std::string overview = "Local search operator statistics:\n";
+    StringAppendF(&overview, StrCat("%", op_name_size,
+                                    "s | Neighbors | Filtered Neighbors | "
+                                    "Accepted Neighbors | Time (s)\n")
+                                 .c_str(),
+                  "");
+    OperatorStats total_stats;
+    const std::string row_format =
+        StrCat("%", op_name_size, "s | %9d | %18d | %18d | %6.3f\n");
+    for (const auto& stat : operator_stats_) {
+      StringAppendF(&overview, row_format.c_str(), stat.first.c_str(),
+                    stat.second.neighbors, stat.second.filtered_neighbors,
+                    stat.second.accepted_neighbors, stat.second.seconds);
+      total_stats.neighbors += stat.second.neighbors;
+      total_stats.filtered_neighbors += stat.second.filtered_neighbors;
+      total_stats.accepted_neighbors += stat.second.accepted_neighbors;
+      total_stats.seconds += stat.second.seconds;
+    }
+    StringAppendF(&overview, row_format.c_str(), "Total", total_stats.neighbors,
+                  total_stats.filtered_neighbors,
+                  total_stats.accepted_neighbors, total_stats.seconds);
+    return overview;
+  }
+  void BeginOperatorStart() override {}
+  void EndOperatorStart() override {}
+  void BeginMakeNextNeighbor(const LocalSearchOperator* op) override {
+    if (last_operator_ != op->DebugString()) {
+      UpdateTime();
+      last_operator_ = op->DebugString();
+    }
+  }
+  void EndMakeNextNeighbor(const LocalSearchOperator* op, bool neighbor_found,
+                           const Assignment* delta,
+                           const Assignment* deltadelta) override {
+    if (neighbor_found) {
+      operator_stats_[op->DebugString()].neighbors++;
+    }
+  }
+  void BeginFilterNeighbor(const LocalSearchOperator* op) override {}
+  void EndFilterNeighbor(const LocalSearchOperator* op,
+                         bool neighbor_found) override {
+    if (neighbor_found) {
+      operator_stats_[op->DebugString()].filtered_neighbors++;
+    }
+  }
+  void BeginAcceptNeighbor(const LocalSearchOperator* op) override {}
+  void EndAcceptNeighbor(const LocalSearchOperator* op,
+                         bool neighbor_found) override {
+    if (neighbor_found) {
+      operator_stats_[op->DebugString()].accepted_neighbors++;
+    }
+  }
+  void Install() override { SearchMonitor::Install(); }
+
+ private:
+  void UpdateTime() {
+    if (!last_operator_.empty()) {
+      timer_.Stop();
+      operator_stats_[last_operator_].seconds += timer_.Get();
+    }
+    timer_.Start();
+  }
+
+  struct OperatorStats {
+    int neighbors = 0;
+    int filtered_neighbors = 0;
+    int accepted_neighbors = 0;
+    double seconds = 0;
+  };
+  WallTimer timer_;
+  std::string last_operator_;
+  std::map<std::string, OperatorStats> operator_stats_;
+};
+
+void InstallLocalSearchProfiler(LocalSearchProfiler* monitor) {
+  monitor->Install();
+}
+
+LocalSearchProfiler* BuildLocalSearchProfiler(Solver* solver) {
+  if (solver->IsLocalSearchProfilingEnabled()) {
+    return new LocalSearchProfiler(solver);
+  } else {
+    return nullptr;
+  }
+}
+
+void DeleteLocalSearchProfiler(LocalSearchProfiler* monitor) { delete monitor; }
+
+std::string Solver::LocalSearchProfile() const {
+  if (local_search_profiler_ != nullptr) {
+    return local_search_profiler_->PrintOverview();
+  }
+  return "";
+}
+
 // ----- Finds a neighbor of the assignment passed -----
 
 class FindOneNeighbor : public DecisionBuilder {
@@ -2472,7 +2630,7 @@ class FindOneNeighbor : public DecisionBuilder {
 
  private:
   bool FilterAccept(const Assignment* delta, const Assignment* deltadelta);
-  void SynchronizeAll();
+  void SynchronizeAll(Solver* solver);
   void SynchronizeFilters(const Assignment* assignment);
 
   Assignment* const assignment_;
@@ -2531,7 +2689,7 @@ Decision* FindOneNeighbor::Next(Solver* const solver) {
     // use the old code with a zero test on pool_.
     // reference_assignment_->Copy(assignment_);
     pool_->Initialize(assignment_);
-    SynchronizeAll();
+    SynchronizeAll(solver);
   }
 
   {
@@ -2554,25 +2712,38 @@ Decision* FindOneNeighbor::Next(Solver* const solver) {
           pool_->SyncNeeded(reference_assignment_.get())) {
         // TODO(user) : SyncNeed(assignment_) ?
         counter = 0;
-        SynchronizeAll();
+        SynchronizeAll(solver);
       }
 
-      if (!limit_->Check() &&
-          ls_operator_->MakeNextNeighbor(delta, deltadelta)) {
+      bool has_neighbor = false;
+      if (!limit_->Check()) {
+        solver->GetLocalSearchMonitor()->BeginMakeNextNeighbor(ls_operator_);
+        has_neighbor = ls_operator_->MakeNextNeighbor(delta, deltadelta);
+        solver->GetLocalSearchMonitor()->EndMakeNextNeighbor(
+            ls_operator_, has_neighbor, delta, deltadelta);
+      }
+      if (has_neighbor) {
         solver->neighbors_ += 1;
         // All filters must be called for incrementality reasons.
         // Empty deltas must also be sent to incremental filters; can be needed
         // to resync filters on non-incremental (empty) moves.
         // TODO(user): Don't call both if no filter is incremental and one
         // of them returned false.
+        solver->GetLocalSearchMonitor()->BeginFilterNeighbor(ls_operator_);
         const bool mh_filter =
             AcceptDelta(solver->ParentSearch(), delta, deltadelta);
         const bool move_filter = FilterAccept(delta, deltadelta);
+        solver->GetLocalSearchMonitor()->EndFilterNeighbor(
+            ls_operator_, mh_filter && move_filter);
         if (mh_filter && move_filter) {
           solver->filtered_neighbors_ += 1;
           assignment_copy->Copy(reference_assignment_.get());
           assignment_copy->Copy(delta);
-          if (solver->SolveAndCommit(restore)) {
+          solver->GetLocalSearchMonitor()->BeginAcceptNeighbor(ls_operator_);
+          const bool accept = solver->SolveAndCommit(restore);
+          solver->GetLocalSearchMonitor()->EndAcceptNeighbor(ls_operator_,
+                                                             accept);
+          if (accept) {
             solver->accepted_neighbors_ += 1;
             assignment_->Store();
             neighbor_found_ = true;
@@ -2586,7 +2757,7 @@ Decision* FindOneNeighbor::Next(Solver* const solver) {
           // use the old code with a zero test on pool_.
           //          reference_assignment_->Copy(assignment_);
           pool_->RegisterNewSolution(assignment_);
-          SynchronizeAll();
+          SynchronizeAll(solver);
         } else {
           break;
         }
@@ -2610,12 +2781,14 @@ bool FindOneNeighbor::FilterAccept(const Assignment* delta,
   return ok;
 }
 
-void FindOneNeighbor::SynchronizeAll() {
+void FindOneNeighbor::SynchronizeAll(Solver* solver) {
   pool_->GetNextSolution(reference_assignment_.get());
   neighbor_found_ = false;
   limit_->Init();
+  solver->GetLocalSearchMonitor()->BeginOperatorStart();
   ls_operator_->Start(reference_assignment_.get());
   SynchronizeFilters(reference_assignment_.get());
+  solver->GetLocalSearchMonitor()->EndOperatorStart();
 }
 
 void FindOneNeighbor::SynchronizeFilters(const Assignment* assignment) {

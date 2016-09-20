@@ -36,10 +36,6 @@ namespace sat {
 // core.
 void MinimizeCore(SatSolver* solver, std::vector<Literal>* core);
 
-// Randomizes the decision heuristic of the given SatParameters.
-// This is what SolveWithRandomParameters() below currently use.
-void RandomizeDecisionHeuristic(MTRandom* random, SatParameters* parameters);
-
 // Because the Solve*() functions below are also used in scripts that requires a
 // special output format, we use this to tell them whether or not to use the
 // default logging framework or simply stdout. Most users should just use
@@ -121,6 +117,29 @@ SatSolver::Status SolveWithCardinalityEncodingAndCore(
 // found.
 SatSolver::Status MinimizeIntegerVariableWithLinearScan(
     IntegerVariable objective_var,
+    const std::function<void(const Model&)>& feasible_solution_observer,
+    Model* model);
+
+// Same as MinimizeIntegerVariableWithLinearScan() but as long as the domain of
+// the variables in var_for_lazy_encoding is not a singleton when the problem is
+// solved to SAT (i.e all the Boolean variables are assigned), we add a new
+// literal that can constrain the non-singleton variable with the lowest lower
+// bound to its lower bound. We exploit the default polarity of the solver
+// to make sure the first decision when resolving from the current state will be
+// to force this variable to its lower bound.
+//
+// Note(user): For now, we pass the set of var_for_lazy_encoding which must
+// contain a set of "decision" variables from which everything else can be
+// deduced. On simple model like the jobshop, passing all the variables there
+// have the same effect (but we don't want to pass their negation, or we need
+// to change the heuristic to not fix variable to their upper bound).
+//
+// TODO(user): If it is too much work to provide this set, we could add a more
+// complex heuristic to decide the next IntegerLiteral that will be associated
+// to a decision in the SatSolver search.
+SatSolver::Status MinimizeIntegerVariableWithLinearScanAndLazyEncoding(
+    IntegerVariable objective_var,
+    const std::vector<IntegerVariable>& var_for_lazy_encoding,
     const std::function<void(const Model&)>& feasible_solution_observer,
     Model* model);
 

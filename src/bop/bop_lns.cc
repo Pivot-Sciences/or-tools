@@ -29,17 +29,15 @@
 #include "sat/sat_solver.h"
 #include "util/bitset.h"
 
-using operations_research::glop::ColIndex;
-using operations_research::glop::DenseRow;
-using operations_research::glop::GlopParameters;
-using operations_research::glop::LinearProgram;
-using operations_research::glop::LPSolver;
-using operations_research::LinearBooleanProblem;
-using operations_research::LinearBooleanConstraint;
-using operations_research::LinearObjective;
-
 namespace operations_research {
 namespace bop {
+
+using ::operations_research::LinearBooleanConstraint;
+using ::operations_research::LinearBooleanProblem;
+using ::operations_research::glop::ColIndex;
+using ::operations_research::glop::DenseRow;
+using ::operations_research::glop::LinearProgram;
+using ::operations_research::glop::LPSolver;
 
 //------------------------------------------------------------------------------
 // BopCompleteLNSOptimizer
@@ -241,8 +239,8 @@ BopOptimizerBase::Status BopAdaptiveLNSOptimizer::Optimize(
 
   // Set-up a sat_propagator_ cleanup task to catch all the exit cases.
   const double initial_dt = sat_propagator_->deterministic_time();
-  auto sat_propagator_cleanup = ::operations_research::util::MakeCleanup(
-      [initial_dt, this, &learned_info, &time_limit]() {
+  auto sat_propagator_cleanup =
+      ::operations_research::util::MakeCleanup([initial_dt, this, &learned_info, &time_limit]() {
         if (!sat_propagator_->IsModelUnsat()) {
           sat_propagator_->SetAssumptionLevel(0);
           sat_propagator_->RestoreSolverToAssumptionLevel();

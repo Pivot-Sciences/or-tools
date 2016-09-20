@@ -42,6 +42,7 @@
 #include "util/saturated_arithmetic.h"
 #include "util/string_array.h"
 
+
 namespace operations_research {
 namespace {
 // ----- Comparison functions -----
@@ -157,7 +158,21 @@ struct ThetaNode {
   // Single interval element
   explicit ThetaNode(const IntervalVar* const interval)
       : total_processing(interval->DurationMin()),
-        total_ect(interval->EndMin()) {}
+        total_ect(interval->StartMin() + interval->DurationMin()) {
+    // NOTE(user): Petr Vilim's thesis assumes that all tasks in the
+    // scheduling problem have fixed duration and that propagation already
+    // updated the bounds of the start/end times accordingly.
+    // The problem in this case is that the recursive formula for computing
+    // total_ect was only proved for the case where the duration is fixed; in
+    // our case, we use StartMin() + DurationMin() for the earliest completion
+    // time of a task, which should not break any assumptions, but may give
+    // bounds that are too loose.
+    // LOG_IF_FIRST_N(WARNING,
+    //                (interval->DurationMin() != interval->DurationMax()), 1)
+    //     << "You are using the Theta-tree on tasks having variable durations. "
+    //        "This may lead to unexpected results, such as discarding valid "
+    //        "solutions or allowing invalid ones.";
+  }
 
   void Compute(const ThetaNode& left, const ThetaNode& right) {
     total_processing = left.total_processing + right.total_processing;
@@ -170,9 +185,8 @@ struct ThetaNode {
   }
 
   std::string DebugString() const {
-    return StringPrintf("ThetaNode{ p = %" GG_LL_FORMAT "d, e = %" GG_LL_FORMAT
-                        "d }",
-                        total_processing, total_ect < 0LL ? -1LL : total_ect);
+    return StrCat("ThetaNode{ p = ", total_processing, ", e = ",
+                  total_ect < 0LL ? -1LL : total_ect, " }");
   }
 
   int64 total_processing;
@@ -750,7 +764,7 @@ class RankedPropagator : public Constraint {
       if (++counter > ranked_first) {
         DCHECK(intervals_[first - 1]->MayBePerformed());
         partial_sequence_.RankFirst(s, first - 1);
-        VLOG(1) << "RankFirst " << first - 1 << " -> "
+        VLOG(2) << "RankFirst " << first - 1 << " -> "
                 << partial_sequence_.DebugString();
       }
     }
@@ -766,7 +780,7 @@ class RankedPropagator : public Constraint {
       last = previous_[last];
       if (++counter > ranked_last) {
         partial_sequence_.RankLast(s, last - 1);
-        VLOG(1) << "RankLast " << last - 1 << " -> "
+        VLOG(2) << "RankLast " << last - 1 << " -> "
                 << partial_sequence_.DebugString();
       }
     }
@@ -1342,6 +1356,7 @@ class UpdatesForADemand {
   void Reset() { up_to_date_ = false; }
   void SetUpdate(int index, int64 update) {
     DCHECK(!up_to_date_);
+    DCHECK_LT(index, updates_.size());
     updates_[index] = update;
   }
   bool up_to_date() const { return up_to_date_; }
@@ -1406,7 +1421,7 @@ class EdgeFinder : public Constraint {
   UpdatesForADemand* GetOrMakeUpdate(int64 demand_min) {
     UpdatesForADemand* update = FindPtrOrNull(update_map_, demand_min);
     if (update == nullptr) {
-      update = new UpdatesForADemand(by_start_min_.size());
+      update = new UpdatesForADemand(tasks_.size());
       update_map_[demand_min] = update;
     }
     return update;

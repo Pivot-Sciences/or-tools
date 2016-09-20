@@ -34,10 +34,10 @@
 #include "base/int_type_indexed_vector.h"
 #include "base/map_util.h"
 #include "sat/clause.h"
+#include "sat/drat.h"
 #include "sat/model.h"
 #include "sat/pb_constraint.h"
 #include "sat/sat_parameters.pb.h"
-#include "sat/unsat_proof.h"
 #include "util/bitset.h"
 #include "util/running_stat.h"
 #include "util/stats.h"
@@ -57,10 +57,12 @@ const int kUnsatTrailIndex = -1;
 class SatSolver {
  public:
   SatSolver();
+  explicit SatSolver(Trail* trail);
   ~SatSolver();
 
   static SatSolver* CreateInModel(Model* model) {
-    SatSolver* solver = new SatSolver();
+    Trail* trail = model->GetOrCreate<Trail>();
+    SatSolver* solver = new SatSolver(trail);
     model->TakeOwnership(solver);
     return solver;
   }
@@ -81,6 +83,9 @@ class SatSolver {
   int NumVariables() const { return num_variables_.value(); }
   BooleanVariable NewBooleanVariable() {
     const int num_vars = NumVariables();
+
+    // We need to be able to encode the variable as a literal.
+    CHECK_LT(2 * num_vars, std::numeric_limits<int32>::max());
     SetNumVariables(num_vars + 1);
     return BooleanVariable(num_vars);
   }
@@ -134,22 +139,6 @@ class SatSolver {
   void AddPropagator(std::unique_ptr<Propagator> propagator);
   void AddLastPropagator(std::unique_ptr<Propagator> propagator);
 
-  // Advanced usage. This is only relevant when trying to compute an unsat core.
-  // All the constraints added by one of the Add*() function above when this was
-  // set to true will be considered for the core. All the others will just be
-  // ignored (and thus save memory during the solve). This starts with a value
-  // of true.
-  void SetNextConstraintsRelevanceForUnsatCore(bool value) {
-    DCHECK(!is_model_unsat_);
-    is_relevant_for_core_computation_ = value;
-  }
-
-  // Returns the number of time one of the Add*() functions was called. This
-  // will also be the unique index associated to the next constraint that will
-  // be added. This unique index is used by UnsatCore() to indicates what
-  // constraints are part of the core.
-  int NumAddedConstraints() const { return num_constraints_; }
-
   // Gives a hint so the solver tries to find a solution with the given literal
   // set to true. Currently this take precedence over the phase saving heuristic
   // and a variable with a preference will always be branched on according to
@@ -174,6 +163,7 @@ class SatSolver {
       const std::vector<std::pair<Literal, double>>& prefs);
 
   // Solves the problem and returns its status.
+  // An empty problem is considered to be SAT.
   //
   // Note that the conflict limit applies only to this function and starts
   // counting from the time it is called.
@@ -237,16 +227,6 @@ class SatSolver {
   // the problem UNSAT.
   std::vector<Literal> GetLastIncompatibleDecisions();
 
-  // Returns an UNSAT core. That is a subset of the problem clauses that are
-  // still UNSAT. A problem constraint of index #i is the one that was added
-  // with the i-th call to one of the Add*() functions, see
-  // NumAddedConstraints().
-  //
-  // Preconditions:
-  // - Solve() must be called with the parameters unsat_proof() set to true.
-  // - It must have returned MODEL_UNSAT.
-  void ComputeUnsatCore(std::vector<int>* core);
-
   // Advanced usage. The next 3 functions allow to drive the search from outside
   // the solver.
 
@@ -262,8 +242,8 @@ class SatSolver {
   // - The conflict is learned.
   // - The decisions are potentially backtracked to the first decision that
   //   propagates more variables because of the newly learned conflict.
-  // - The returned value is equal to trail_.Index() after this backtracking and
-  //   just before the new propagation (due to the conflict) which is also
+  // - The returned value is equal to trail_->Index() after this backtracking
+  //   and just before the new propagation (due to the conflict) which is also
   //   performed by this function.
   int EnqueueDecisionAndBackjumpOnConflict(Literal true_literal);
 
@@ -316,11 +296,11 @@ class SatSolver {
   void ExtractClauses(Output* out) {
     CHECK(!IsModelUnsat());
     Backtrack(0);
+    out->SetNumVariables(NumVariables());
 
     // It is important to process the newly fixed variables, so they are not
     // present in the clauses we export.
-    if (num_processed_fixed_variables_ < trail_.Index()) {
-      ProcessNewlyFixedVariableResolutionNodes();
+    if (num_processed_fixed_variables_ < trail_->Index()) {
       ProcessNewlyFixedVariables();
     }
     DeleteDetachedClauses();
@@ -351,8 +331,8 @@ class SatSolver {
   };
   int CurrentDecisionLevel() const { return current_decision_level_; }
   const std::vector<Decision>& Decisions() const { return decisions_; }
-  const Trail& LiteralTrail() const { return trail_; }
-  const VariablesAssignment& Assignment() const { return trail_.Assignment(); }
+  const Trail& LiteralTrail() const { return *trail_; }
+  const VariablesAssignment& Assignment() const { return trail_->Assignment(); }
 
   // Some statistics since the creation of the solver.
   int64 num_branches() const;
@@ -370,6 +350,27 @@ class SatSolver {
   // debug mode, and after this is called, all the learned clauses are tested to
   // satisfy this saved assignement.
   void SaveDebugAssignment();
+
+  // Returns true iff the loaded problem only contains clauses.
+  bool ProblemIsPureSat() const { return problem_is_pure_sat_; }
+
+  void SetDratWriter(DratWriter* drat_writer) { drat_writer_ = drat_writer; }
+
+  // This function is here to deal with the case where a SAT/CP model is found
+  // to be trivially UNSAT while the user is constructing the model. Instead of
+  // having to test the status of all the lines adding a constraint, one can
+  // just check if the solver is not UNSAT once the model is constructed. Note
+  // that we usually log a warning on the first constraint that caused a
+  // "trival" unsatisfiability.
+  void NotifyThatModelIsUnsat() { is_model_unsat_ = true; }
+
+  // TODO(user): This internal function should probably not be exposed here.
+  void AddBinaryClauseDuringSearch(Literal a, Literal b) {
+    // The new clause should not propagate.
+    CHECK(!trail_->Assignment().LiteralIsFalse(a));
+    CHECK(!trail_->Assignment().LiteralIsFalse(b));
+    binary_implication_graph_.AddBinaryClause(a, b);
+  }
 
  private:
   // Calls Propagate() and returns true if no conflict occured. Otherwise,
@@ -428,7 +429,7 @@ class SatSolver {
 
   // Returns the decision level of a given variable.
   int DecisionLevel(BooleanVariable var) const {
-    return trail_.Info(var).level;
+    return trail_->Info(var).level;
   }
 
   // Returns the relevant pointer if the given variable was propagated by the
@@ -459,15 +460,14 @@ class SatSolver {
   // have the same behavior if we change the implementation.
   bool ClauseIsUsedAsReason(SatClause* clause) const {
     const BooleanVariable var = clause->PropagatedLiteral().Variable();
-    return trail_.Info(var).trail_index < trail_.Index() &&
-           trail_[trail_.Info(var).trail_index].Variable() == var &&
+    return trail_->Info(var).trail_index < trail_->Index() &&
+           (*trail_)[trail_->Info(var).trail_index].Variable() == var &&
            ReasonClauseOrNull(var) == clause;
   }
 
   // Add a problem clause. Not that the clause is assumed to be "cleaned", that
   // is no duplicate variables (not strictly required) and not empty.
-  bool AddProblemClauseInternal(const std::vector<Literal>& literals,
-                                ResolutionNode* node);
+  bool AddProblemClauseInternal(const std::vector<Literal>& literals);
 
   // This is used by all the Add*LinearConstraint() functions. It detects
   // infeasible/trivial constraints or clause constraints and takes the proper
@@ -480,7 +480,7 @@ class SatSolver {
   // literals of the learned close except one will be false. Thus the last one
   // will be implied True. This function also Enqueue() the implied literal.
   void AddLearnedClauseAndEnqueueUnitPropagation(
-      const std::vector<Literal>& literals, bool must_be_kept, ResolutionNode* node);
+      const std::vector<Literal>& literals, bool must_be_kept);
 
   // Creates a new decision which corresponds to setting the given literal to
   // True and Enqueue() this change.
@@ -500,13 +500,6 @@ class SatSolver {
   // Unrolls the trail until a given point. This unassign the assigned variables
   // and add them to the priority queue with the correct weight.
   void Untrail(int target_trail_index);
-  void UntrailWithoutPQUpdate(int target_trail_index);
-  void UntrailPropagators(int target_trail_index);
-
-  // Update the resolution node associated to all the newly fixed variables so
-  // each node expresses the reason why this variable was assigned. This is
-  // needed because level zero variables are treated differently by the solver.
-  void ProcessNewlyFixedVariableResolutionNodes();
 
   // Deletes all the clauses that are detached.
   void DeleteDetachedClauses();
@@ -538,6 +531,12 @@ class SatSolver {
       std::vector<Literal>* reason_used_to_infer_the_conflict,
       std::vector<SatClause*>* subsumed_clauses);
 
+  // Fills literals with all the literals in the reasons of the literals in the
+  // given input. The output vector will have no duplicates and will not contain
+  // the literals already present in the input.
+  void ComputeUnionOfReasons(const std::vector<Literal>& input,
+                             std::vector<Literal>* literals);
+
   // Given an assumption (i.e. literal) currently assigned to false, this will
   // returns the set of all assumptions that caused this particular assignment.
   //
@@ -553,19 +552,6 @@ class SatSolver {
   void ComputePBConflict(int max_trail_index, Coefficient initial_slack,
                          MutableUpperBoundedLinearConstraint* conflict,
                          int* backjump_level);
-
-  // Creates the root resolution node associated with the current constraint.
-  // This will returns nullptr if the solver is not configured to compute unsat
-  // core or if the current constraint is not relevant for the core computation.
-  ResolutionNode* CreateRootResolutionNode();
-
-  // Creates a ResolutionNode associated to a learned conflict. Basically, the
-  // node will hold the information that the learned clause can be derived from
-  // the conflict clause and all the reason that where used during the
-  // computation of the first uip conflict.
-  ResolutionNode* CreateResolutionNode(
-      ResolutionNode* failing_clause_resolution_node,
-      ClauseRef reason_used_to_infer_the_conflict);
 
   // Applies some heuristics to a conflict in order to minimize its size and/or
   // replace literals by other literals from lower decision levels. The first
@@ -653,9 +639,6 @@ class SatSolver {
 
   BooleanVariable num_variables_;
 
-  // The number of constraints of the initial problem that where added.
-  int num_constraints_;
-
   // All the clauses managed by the solver (initial and learned). This vector
   // has ownership of the pointers. We currently do not use
   // std::unique_ptr<SatClause> because it can't be used with some STL
@@ -693,7 +676,10 @@ class SatSolver {
   BinaryClauseManager binary_clauses_;
 
   // The solver trail.
-  Trail trail_;
+  Trail* trail_;
+
+  // This is used by the non-model constructor to properly cleanup trail_.
+  std::unique_ptr<Trail> owned_trail_;
 
   // Used for debugging only. See SaveDebugAssignment().
   VariablesAssignment debug_assignment_;
@@ -761,6 +747,10 @@ class SatSolver {
 
   // Variable ordering (priority will be adjusted dynamically). queue_elements_
   // holds the elements used by var_ordering_ (it uses pointers).
+  //
+  // Note that we recover the variable that a WeightedVarQueueElement refers to
+  // by its position in the queue_elements_ vector, and we can recover the later
+  // using (pointer - &queue_elements_[0]).
   struct WeightedVarQueueElement {
     WeightedVarQueueElement() : heap_index(-1), tie_breaker(0.0), weight(0.0) {}
 
@@ -799,35 +789,45 @@ class SatSolver {
   COMPILE_ASSERT(sizeof(WeightedVarQueueElement) == 16,
                  ERROR_WeightedVarQueueElement_is_not_well_compacted);
 
-  bool is_var_ordering_initialized_;
+  bool var_ordering_is_initialized_;
   AdjustablePriorityQueue<WeightedVarQueueElement> var_ordering_;
   ITIVector<BooleanVariable, WeightedVarQueueElement> queue_elements_;
+
+  // This is used for the branching heuristic described in "Learning Rate Based
+  // Branching Heuristic for SAT solvers", J.H.Liang, V. Ganesh, P. Poupart,
+  // K.Czarnecki, SAT 2016.
+  //
+  // The entries are sorted by trail index, and one can get the number of
+  // conflicts during which a variable at a given trail index i was assigned by
+  // summing the entry.count for all entries with a trail index greater than i.
+  struct NumConflictsStackEntry {
+    int trail_index;
+    int64 count;
+  };
+  std::vector<NumConflictsStackEntry> num_conflicts_stack_;
 
   // Whether the priority of the given variable needs to be updated in
   // var_ordering_. Note that this is only accessed for assigned variables and
   // that for efficiency it is indexed by trail indices. If
-  // pq_need_update_for_var_at_trail_index_[trail_.Info(var).trail_index] is
+  // pq_need_update_for_var_at_trail_index_[trail_->Info(var).trail_index] is
   // true when we untrail var, then either var need to be inserted in the queue,
   // or we need to notify that its priority has changed.
-  Bitset64<int64> pq_need_update_for_var_at_trail_index_;
+  BitQueue64 pq_need_update_for_var_at_trail_index_;
 
   // Increment used to bump the variable activities.
   double variable_activity_increment_;
   double clause_activity_increment_;
 
-  // Stores variable activity.
+  // Stores variable activity and the number of time each variable was "bumped".
+  // The later is only used with the ERWA heuristic.
   ITIVector<BooleanVariable, double> activities_;
+  ITIVector<BooleanVariable, int64> num_bumps_;
 
-  // Used by NextBranch() to choose the polarity of the next decision.
-  struct Polarity {
-    bool value;
-    bool use_phase_saving;
-    void SetLastAssignmentValue(bool v) {
-      if (use_phase_saving) value = v;
-    }
-  };
-  bool is_decision_heuristic_initialized_;
-  ITIVector<BooleanVariable, Polarity> polarity_;
+  // Used by NextBranch() to choose the polarity of the next decision. For the
+  // phase saving, the last polarity is stored in trail_->Info(var).
+  bool decision_heuristic_is_initialized_;
+  ITIVector<BooleanVariable, bool> var_use_phase_saving_;
+  ITIVector<BooleanVariable, bool> var_polarity_;
   ITIVector<BooleanVariable, double> weighted_sign_;
 
   // If true, leave the initial variable activities to their current value.
@@ -850,6 +850,7 @@ class SatSolver {
   // Temporary members used during conflict analysis.
   SparseBitset<BooleanVariable> is_marked_;
   SparseBitset<BooleanVariable> is_independent_;
+  SparseBitset<BooleanVariable> tmp_mark_;
   std::vector<int> min_trail_index_per_level_;
 
   // Temporary members used by CanBeInferedFromConflictVariables().
@@ -866,29 +867,18 @@ class SatSolver {
   // Temporary vectors used by EnqueueDecisionAndBackjumpOnConflict().
   std::vector<Literal> learned_conflict_;
   std::vector<Literal> reason_used_to_infer_the_conflict_;
+  std::vector<Literal> extra_reason_literals_;
   std::vector<SatClause*> subsumed_clauses_;
 
   // "cache" to avoid inspecting many times the same reason during conflict
   // analysis.
   VariableWithSameReasonIdentifier same_reason_identifier_;
 
-  // Stores the resolution DAG.
-  // This is only used is parameters_.unsat_proof() is true.
-  UnsatProof unsat_proof_;
-
   // A random number generator.
   mutable MTRandom random_;
 
   // Temporary vector used by AddProblemClause().
   std::vector<LiteralWithCoeff> tmp_pb_constraint_;
-
-  // List of nodes that will need to be unlocked when this class is destructed.
-  // TODO(user): This is currently used for the pseudo-Boolean constraint
-  // resolution nodes, and is not really clean.
-  std::vector<ResolutionNode*> to_unlock_;
-
-  // Temporary vector used by CreateResolutionNode().
-  std::vector<ResolutionNode*> tmp_parents_;
 
   // Boolean used to include/exclude constraints from the core computation.
   bool is_relevant_for_core_computation_;
@@ -909,6 +899,11 @@ class SatSolver {
   // it is necessary to keep track of the last time the time was advanced.
   double deterministic_time_at_last_advanced_time_limit_;
 
+  // This is true iff the loaded problem only contains clauses.
+  bool problem_is_pure_sat_;
+
+  DratWriter* drat_writer_;
+
   mutable StatsGroup stats_;
   DISALLOW_COPY_AND_ASSIGN(SatSolver);
 };
@@ -922,6 +917,32 @@ inline std::function<void(Model*)> BooleanLinearConstraint(
   };
 }
 
+inline std::function<void(Model*)> ExactlyOneConstraint(
+    const std::vector<Literal>& literals) {
+  return [=](Model* model) {
+    std::vector<LiteralWithCoeff> cst;
+    for (const Literal l : literals) {
+      cst.push_back(LiteralWithCoeff(l, Coefficient(1)));
+    }
+    model->GetOrCreate<SatSolver>()->AddLinearConstraint(
+        /*use_lower_bound=*/true, Coefficient(1),
+        /*use_upper_bound=*/true, Coefficient(1), &cst);
+  };
+}
+
+inline std::function<void(Model*)> ClauseConstraint(
+    const std::vector<Literal>& literals) {
+  return [=](Model* model) {
+    std::vector<LiteralWithCoeff> cst;
+    for (const Literal l : literals) {
+      cst.push_back(LiteralWithCoeff(l, Coefficient(1)));
+    }
+    model->GetOrCreate<SatSolver>()->AddLinearConstraint(
+        /*use_lower_bound=*/true, Coefficient(1),
+        /*use_upper_bound=*/false, Coefficient(1), &cst);
+  };
+}
+
 inline std::function<SatParameters(Model*)> NewSatParameters(std::string params) {
   return [=](Model* model) {
     sat::SatParameters parameters;
@@ -930,6 +951,12 @@ inline std::function<SatParameters(Model*)> NewSatParameters(std::string params)
       model->GetOrCreate<SatSolver>()->SetParameters(parameters);
     }
     return parameters;
+  };
+}
+
+inline std::function<int64(const Model&)> ValueOf(Literal l) {
+  return [=](const Model& model) {
+    return model.Get<SatSolver>()->Assignment().LiteralIsTrue(l);
   };
 }
 

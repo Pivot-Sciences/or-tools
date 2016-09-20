@@ -21,6 +21,7 @@ option java_multiple_files = true;
 option csharp_namespace = "Google.OrTools.ConstraintSolver";
 
 import "constraint_solver/routing_enums.proto";
+import "constraint_solver/solver_parameters.proto";
 
 package operations_research;
 
@@ -241,12 +242,22 @@ message RoutingSearchParameters {
   bool use_light_propagation = 11;
 
   // --- Miscellaneous ---
-  // These are advanced settings which should not be modified unless you know
-  // what you are doing.
+  // Some of these are advanced settings which should not be modified unless you
+  // know what you are doing.
   // If true, arc cost evaluators will be fingerprinted. The fingerprint will
   // be used when computing vehicle cost equivalent classes, otherwise the
   // address of the evaluator will be used.
   bool fingerprint_arc_cost_evaluators = 12;
+  // Activates search logging. For each solution found during the search, the
+  // following will be displayed: its objective value, the maximum objective
+  // value since the beginning of the search, the elapsed time since the
+  // beginning of the search, the number of branches explored in the search
+  // tree, the number of failures in the search tree, the depth of the search
+  // tree, the number of local search neighbors explored, the number of local
+  // search neighbors filtered by local search filters, the number of local
+  // search neighbors accepted, the total memory used and the percentage of the
+  // search done.
+  bool log_search = 13;
 }
 
 // Parameters which have to be set when creating a RoutingModel.
@@ -257,9 +268,14 @@ message RoutingModelParameters {
   // result in significant speedups.
   bool reduce_vehicle_cost_model = 1;
   // Algorithm to use to compress the constraint solver trail.
+  // TODO(user): This field is obsolete as it is redudant with the
+  // solver_parameters field which contains trail compression settings.
+  // Remove it.
   enum TrailCompression {
     NONE = 0;
     ZLIB = 1;
   }
   TrailCompression trail_compression = 2;
+  // Parameters to use in the underlying constraint solver.
+  ConstraintSolverParameters solver_parameters = 3;
 }

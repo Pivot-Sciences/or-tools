@@ -20,27 +20,25 @@
 #include "base/stringprintf.h"
 #include "google/protobuf/text_format.h"
 #include "base/stl_util.h"
+#include "algorithms/sparse_permutation.h"
 #include "glop/lp_solver.h"
 #include "lp_data/lp_print_utils.h"
 #include "sat/boolean_problem.h"
 #include "sat/lp_utils.h"
-#include "sat/optimization.h"
 #include "sat/sat_solver.h"
+#include "sat/symmetry.h"
+#include "sat/util.h"
 #include "util/bitset.h"
-
-using operations_research::glop::ColIndex;
-using operations_research::glop::DenseRow;
-using operations_research::glop::GlopParameters;
-using operations_research::glop::LinearProgram;
-using operations_research::glop::LPSolver;
-using operations_research::glop::RowIndex;
-using operations_research::LinearBooleanProblem;
-using operations_research::LinearBooleanConstraint;
-using operations_research::LinearObjective;
 
 namespace operations_research {
 namespace bop {
 namespace {
+
+using ::operations_research::glop::ColIndex;
+using ::operations_research::glop::DenseRow;
+using ::operations_research::glop::GlopParameters;
+using ::operations_research::glop::RowIndex;
+
 BopOptimizerBase::Status SolutionStatus(const BopSolution& solution,
                                         int64 lower_bound) {
   // The lower bound might be greater that the cost of a feasible solution due
@@ -93,7 +91,23 @@ BopOptimizerBase::Status GuidedSatFirstSolutionGenerator::SynchronizeIfNeeded(
   state_update_stamp_ = problem_state.update_stamp();
 
   // Create the sat_solver if not already done.
-  if (!sat_solver_) sat_solver_.reset(new sat::SatSolver());
+  if (!sat_solver_) {
+    sat_solver_.reset(new sat::SatSolver());
+
+    // Add in symmetries.
+    if (problem_state.GetParameters()
+            .exploit_symmetry_in_sat_first_solution()) {
+      std::vector<std::unique_ptr<SparsePermutation>> generators;
+      sat::FindLinearBooleanProblemSymmetries(problem_state.original_problem(),
+                                              &generators);
+      std::unique_ptr<sat::SymmetryPropagator> propagator(
+          new sat::SymmetryPropagator);
+      for (int i = 0; i < generators.size(); ++i) {
+        propagator->AddSymmetry(std::move(generators[i]));
+      }
+      sat_solver_->AddPropagator(std::move(propagator));
+    }
+  }
 
   const BopOptimizerBase::Status load_status =
       LoadStateProblemToSatSolver(problem_state, sat_solver_.get());

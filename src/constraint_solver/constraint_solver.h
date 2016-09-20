@@ -13,17 +13,19 @@
 
 //
 // Declaration of the core objects for the constraint solver.
-// The literature around constraint programming is extremelly dense but one
-// can find some basic introductions in the following links:
-//   http://en.wikipedia.org/wiki/Constraint_programming
-//   http://kti.mff.cuni.cz/~bartak/constraints/index.html
 //
+// The literature around constraint programming is extremely dense but one
+// can find some basic introductions in the following links:
+//   - http://en.wikipedia.org/wiki/Constraint_programming
+//   - http://kti.mff.cuni.cz/~bartak/constraints/index.html
 //
 // Here is a very simple Constraint Programming problem:
+//
 //   Knowing that we see 56 legs and 20 heads, how many pheasants and rabbits
 //   are we looking at?
 //
-// Here is a simple Constraint Programming code to find out:
+// Here is some simple Constraint Programming code to find out:
+//
 //   void pheasant() {
 //     Solver s("pheasant");
 //     IntVar* const p = s.MakeIntVar(0, 20, "pheasant"));
@@ -46,6 +48,7 @@
 //   }
 //
 // which outputs:
+//
 //   rabbits -> 8, pheasants -> 12
 //   Solver(name = "pheasant",
 //          state = OUTSIDE_SEARCH,
@@ -70,7 +73,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/commandlineflags.h"
 #include "base/integral_types.h"
 #include "base/logging.h"
@@ -81,6 +83,7 @@
 #include "base/map_util.h"
 #include "base/hash.h"
 #include "constraint_solver/solver_parameters.pb.h"
+#include "util/sorted_interval_list.h"
 #include "util/tuple_set.h"
 #include "base/random.h"
 
@@ -106,7 +109,7 @@ class DecisionBuilder;
 class DecisionVisitor;
 class Demon;
 class DemonProfiler;
-class DemonProfiler;
+class LocalSearchProfiler;
 class Dimension;
 class DisjunctiveConstraint;
 class ExpressionCache;
@@ -129,6 +132,7 @@ class OptimizeVar;
 class Pack;
 class PropagationBaseObject;
 class PropagationMonitor;
+class LocalSearchMonitor;
 class Queue;
 class RevBitMatrix;
 class RevBitSet;
@@ -229,7 +233,7 @@ struct DefaultPhaseParameters {
 // Solver Class
 //
 // A solver represent the main computation engine. It implements the whole
-// range of Constraint Programming protocol:
+// range of Constraint Programming protocols:
 //   - Reversibility
 //   - Propagation
 //   - Search
@@ -244,7 +248,7 @@ struct DefaultPhaseParameters {
 //
 // For the time being, Solver is not MT_SAFE, nor MT_HOT.
 /////////////////////////////////////////////////////////////////////
-
+//
 class Solver {
  public:
   // Holds semantic information stating that the 'expression' has been
@@ -1037,28 +1041,28 @@ class Solver {
   static int64 MemoryUsage();
 
 
-  // wall_time() in ms since the creation of the solver.
+  // The wall_time() in ms since the creation of the solver.
   int64 wall_time() const;
 
-  // number of branches explored since the creation of the solver.
+  // The number of branches explored since the creation of the solver.
   int64 branches() const { return branches_; }
 
-  // number of solutions found since the start of the search.
+  // The number of solutions found since the start of the search.
   int64 solutions() const;
 
-  // number of demons executed during search for a given priority.
+  // The number of demons executed during search for a given priority.
   int64 demon_runs(DemonPriority p) const { return demon_runs_[p]; }
 
-  // number of failures encountered since the creation of the solver.
+  // The number of failures encountered since the creation of the solver.
   int64 failures() const { return fails_; }
 
-  // number of neighbors created
+  // The number of neighbors created.
   int64 neighbors() const { return neighbors_; }
 
-  // number of filtered neighbors (neighbors accepted by filters)
+  // The number of filtered neighbors (neighbors accepted by filters).
   int64 filtered_neighbors() const { return filtered_neighbors_; }
 
-  // number of accepted neighbors
+  // The number of accepted neighbors.
   int64 accepted_neighbors() const { return accepted_neighbors_; }
 
   // The stamp indicates how many moves in the search tree we have performed.
@@ -1416,13 +1420,43 @@ class Solver {
   // Creates a demon from a closure.
   Demon* MakeClosureDemon(Closure closure);
 
-  // (l <= b <= u)
+  // ----- Between and related constraints -----
+
+  // (l <= v <= u)
   Constraint* MakeBetweenCt(IntExpr* const v, int64 l, int64 u);
+
+  // (v < l || v > u)
+  // This constraint is lazy as it will not make holes in the domain of
+  // variables. It will propagate only when expr->Min() >= l
+  // or expr->Max() <= u.
+  Constraint* MakeNotBetweenCt(IntExpr* const v, int64 l, int64 u);
 
   // b == (l <= v <= u)
   Constraint* MakeIsBetweenCt(IntExpr* const v, int64 l, int64 u,
                               IntVar* const b);
   IntVar* MakeIsBetweenVar(IntExpr* const v, int64 l, int64 u);
+
+  // ----- Member and related constraints -----
+
+  // v in set. Propagation is lazy, i.e. this constraint does not
+  // creates holes in the domain of the variable.
+  Constraint* MakeMemberCt(IntExpr* const v, const std::vector<int64>& values);
+  Constraint* MakeMemberCt(IntExpr* const v, const std::vector<int>& values);
+
+  // v not in set.
+  Constraint* MakeNotMemberCt(IntExpr* const v, const std::vector<int64>& values);
+  Constraint* MakeNotMemberCt(IntExpr* const v, const std::vector<int>& values);
+
+  // v should not be in the list of forbidden intervals [start[i]..end[i]].
+  Constraint* MakeNotMemberCt(IntExpr* const v, std::vector<int64> starts,
+                              std::vector<int64> ends);
+  // v should not be in the list of forbidden intervals [start[i]..end[i]].
+  Constraint* MakeNotMemberCt(IntExpr* const v, std::vector<int> starts,
+                              std::vector<int> ends);
+#if !defined(SWIG)
+  // v should not be in the list of forbidden intervals.
+  Constraint* MakeNotMemberCt(IntExpr* v, SortedDisjointIntervalList intervals);
+#endif  // !defined(SWIG)
 
   // b == (v in set)
   Constraint* MakeIsMemberCt(IntExpr* const v, const std::vector<int64>& values,
@@ -1431,21 +1465,6 @@ class Solver {
                              IntVar* const b);
   IntVar* MakeIsMemberVar(IntExpr* const v, const std::vector<int64>& values);
   IntVar* MakeIsMemberVar(IntExpr* const v, const std::vector<int>& values);
-  // v in set. Propagation is lazy, i.e. this constraint does not
-  // creates holes in the domain of the variable.
-  Constraint* MakeMemberCt(IntExpr* const v, const std::vector<int64>& values);
-  Constraint* MakeMemberCt(IntExpr* const v, const std::vector<int>& values);
-
-  // v should not be in the list of forbidden intervals [start[i]..end[i]].
-  // It assumes intervals are sorted and non overlapping.
-  Constraint* MakeForbiddenIntervalCt(IntExpr* const v,
-                                      std::vector<int64> starts,
-                                      std::vector<int64> ends);
-  // v should not be in the list of forbidden intervals [start[i]..end[i]].
-  // It assumes intervals are sorted and non overlapping.
-  Constraint* MakeForbiddenIntervalCt(IntExpr* const v,
-                                      std::vector<int> starts,
-                                      std::vector<int> ends);
 
   // |{i | v[i] == value}| == count
   Constraint* MakeCount(const std::vector<IntVar*>& v, int64 value, int64 count);
@@ -1645,6 +1664,12 @@ class Solver {
                             const std::vector<IntVar*>& cumuls,
                             const std::vector<IntVar*>& slacks,
                             IndexEvaluator2 transit_evaluator);
+  // Constraint enforcing that status[i] is true iff there's a path defined on
+  // next variables from sources[i] to sinks[i].
+  // TODO(user): Only does checking on WhenBound events on next variables.
+  // Check whether more propagation is needed.
+  Constraint* MakePathConnected(std::vector<IntVar*> nexts, std::vector<int64> sources,
+                                std::vector<int64> sinks, std::vector<IntVar*> status);
   // This constraint maps the domain of 'var' onto the array of
   // variables 'vars'. That is
   // for all i in [0 .. size - 1]: vars[i] == 1 <=> var->Contains(i);
@@ -2032,7 +2057,7 @@ class Solver {
   // This method creates an empty assignment.
   Assignment* MakeAssignment();
 
-  // This method creates an assignnment which is a copy of 'a'.
+  // This method creates an assignment which is a copy of 'a'.
   Assignment* MakeAssignment(const Assignment* const a);
 
   // ----- Solution Collectors -----
@@ -2343,7 +2368,7 @@ class Solver {
 
   // Creates a decision builder which sequentially composes decision builders.
   // At each leaf of a decision builder, the next decision builder is therefore
-  // called. For instance Compose(db1, db2) will result in the following tree:
+  // called. For instance, Compose(db1, db2) will result in the following tree:
   //          d1 tree              |
   //         /   |   \             |
   //         db1 leaves            |
@@ -2808,13 +2833,18 @@ class Solver {
   // set to true.
   void ExportProfilingOverview(const std::string& filename);
 
+  // Returns local search profiling information in a human readable format.
+  // TODO(user): Add a profiling protocol buffer and merge demon and local
+  // search profiles.
+  std::string LocalSearchProfile() const;
+
   // Returns true whether the current search has been
-  // created using a Solve() call instead of a NewSearch 0ne. It
-  // returns false if the solver is not is search at all.
+  // created using a Solve() call instead of a NewSearch one. It
+  // returns false if the solver is not in search at all.
   bool CurrentlyInSolve() const;
 
   // Counts the number of constraints that have been added
-  // to the solver before the search,
+  // to the solver before the search.
   int constraints() const { return constraints_list_.size(); }
 
   // Accepts the given model visitor.
@@ -2857,6 +2887,8 @@ class Solver {
   bool InstrumentsDemons() const;
   // Returns whether we are profiling the solver.
   bool IsProfilingEnabled() const;
+  // Returns whether we are profiling local search.
+  bool IsLocalSearchProfilingEnabled() const;
   // Returns whether we are tracing variables.
   bool InstrumentsVariables() const;
   // Returns whether all variables should be named.
@@ -2868,6 +2900,11 @@ class Solver {
   // Adds the propagation monitor to the solver. This is called internally when
   // a propagation monitor is passed to the Solve() or NewSearch() method.
   void AddPropagationMonitor(PropagationMonitor* const monitor);
+  // Returns the local search monitor.
+  LocalSearchMonitor* GetLocalSearchMonitor() const;
+  // Adds the local search monitor to the solver. This is called internally when
+  // a propagation monitor is passed to the Solve() or NewSearch() method.
+  void AddLocalSearchMonitor(LocalSearchMonitor* monitor);
 
   // Unsafe temporary vector. It is used to avoid leaks in operations
   // that need storage and that may fail. See IntVar::SetValues() for
@@ -2884,6 +2921,8 @@ class Solver {
   friend class Queue;
   friend class SearchMonitor;
   friend class SearchLimit;
+  friend class RoutingModel;
+  friend class LocalSearchProfiler;
 
 #if !defined(SWIG)
   friend void InternalSaveBooleanVarValue(Solver* const, IntVar* const);
@@ -2914,10 +2953,8 @@ class Solver {
   void FinishCurrentSearch();
   void RestartCurrentSearch();
 
-  // These methods are only useful for the SWIG wrappers, who need a way
-  // to externally cause the Solver to fail. See
-  // http://cs/file:constraint_solver.swig%20ShouldFail .
-  // TODO(user): rename these to MarkFailure() and CheckMarkedFailure().
+  // These methods are only useful for the SWIG wrappers, which need a way
+  // to externally cause the Solver to fail.
   void ShouldFail() { should_fail_ = true; }
   void CheckFail() {
     if (!should_fail_) return;
@@ -3047,6 +3084,8 @@ class Solver {
   std::function<void()> fail_intercept_;
   // Demon monitor
   DemonProfiler* const demon_profiler_;
+  // Local search profiler monitor
+  LocalSearchProfiler* const local_search_profiler_;
 
   // interval of constants cached, inclusive:
   enum { MIN_CACHED_INT_CONST = -8, MAX_CACHED_INT_CONST = 8 };
@@ -3070,6 +3109,7 @@ class Solver {
   std::unique_ptr<ModelCache> model_cache_;
   std::unique_ptr<PropagationMonitor> propagation_monitor_;
   PropagationMonitor* print_trace_;
+  std::unique_ptr<LocalSearchMonitor> local_search_monitor_;
   int anonymous_variable_index_;
   bool should_fail_;
 
@@ -3153,7 +3193,7 @@ class PropagationBaseObject : public BaseObject {
     solver_->set_variable_to_clean_on_fail(v);
   }
 
-  // Naming
+  // Object naming.
   virtual std::string name() const;
   void set_name(const std::string& name);
   // Returns whether the object has been named or not.
@@ -3207,7 +3247,7 @@ class DecisionVisitor : public BaseObject {
 };
 
 // A DecisionBuilder is responsible for creating the search tree. The
-// important method is Next() that returns the next decision to execute.
+// important method is Next(), which returns the next decision to execute.
 class DecisionBuilder : public BaseObject {
  public:
   DecisionBuilder() {}
@@ -3238,9 +3278,9 @@ class DecisionBuilder : public BaseObject {
 //   of the variables. The main concept is that demons are listeners that are
 //   attached to the variables and listen to their modifications.
 // There are two methods:
-//  - Run() is the actual methods that is called when the demon is processed
-//  - priority() returns its priority. Standart priorities are slow, normal
-//    or fast. immediate is reserved for variables and are treated separately.
+//  - Run() is the actual method called when the demon is processed.
+//  - priority() returns its priority. Standard priorities are slow, normal
+//    or fast. "immediate" is reserved for variables and is treated separately.
 class Demon : public BaseObject {
  public:
   // This indicates the priority of a demon. Immediate demons are treated
@@ -3262,7 +3302,7 @@ class Demon : public BaseObject {
   // current position.
   void inhibit(Solver* const s);
 
-  // This method un-inhibit the demon that was inhibited.
+  // This method un-inhibits the demon that was inhibited.
   void desinhibit(Solver* const s);
 
  private:
@@ -3330,10 +3370,13 @@ class ModelVisitor : public BaseObject {
   static const char kModulo[];
   static const char kNoCycle[];
   static const char kNonEqual[];
+  static const char kNotBetween[];
+  static const char kNotMember[];
   static const char kNullIntersect[];
   static const char kOpposite[];
   static const char kPack[];
   static const char kPathCumul[];
+  static const char kDelayedPathCumul[];
   static const char kPerformedExpr[];
   static const char kPower[];
   static const char kProduct[];
@@ -3387,6 +3430,7 @@ class ModelVisitor : public BaseObject {
   static const char kEarlyDateArgument[];
   static const char kEndMaxArgument[];
   static const char kEndMinArgument[];
+  static const char kEndsArgument[];
   static const char kExpressionArgument[];
   static const char kFailuresLimitArgument[];
   static const char kFinalStatesArgument[];
@@ -3420,6 +3464,7 @@ class ModelVisitor : public BaseObject {
   static const char kSolutionLimitArgument[];
   static const char kStartMaxArgument[];
   static const char kStartMinArgument[];
+  static const char kStartsArgument[];
   static const char kStepArgument[];
   static const char kTargetArgument[];
   static const char kTimeLimitArgument[];
@@ -3500,7 +3545,7 @@ class ModelVisitor : public BaseObject {
   virtual void VisitIntegerVariableEvaluatorArgument(
       const std::string& arg_name, const Solver::Int64ToIntVar& arguments);
 
-  // Using SWIG on calbacks is troublesome, let's hide these methods during
+  // Using SWIG on callbacks is troublesome, so we hide these methods during
   // the wrapping.
   void VisitInt64ToBoolExtension(Solver::IndexFilter1 callback, int64 index_min,
                                  int64 index_max);
@@ -3512,10 +3557,10 @@ class ModelVisitor : public BaseObject {
 #endif  // #if !defined(SWIG)
 };
 
-// A constraint is the main modeling object. It proposes two methods:
+// A constraint is the main modeling object. It provides two methods:
 //   - Post() is responsible for creating the demons and attaching them to
-//     immediate demons()
-//   - InitialPropagate() is called once just after the Post and performs
+//     immediate demons().
+//   - InitialPropagate() is called once just after Post and performs
 //     the initial propagation. The subsequent propagations will be performed
 //     by the demons Posted during the post() method.
 class Constraint : public PropagationBaseObject {
@@ -3551,8 +3596,8 @@ class Constraint : public PropagationBaseObject {
   DISALLOW_COPY_AND_ASSIGN(Constraint);
 };
 
-// Cast constraints are special channeling constraints the goal of
-// which is to keep a variable in sync with an expression.  They are
+// Cast constraints are special channeling constraints designed
+// to keep a variable in sync with an expression.  They are
 // created internally when Var() is called on a subclass of IntExpr.
 class CastConstraint : public Constraint {
  public:
@@ -3584,16 +3629,16 @@ class SearchMonitor : public BaseObject {
   // End of the search.
   virtual void ExitSearch();
 
-  // Before calling DecisionBuilder::Next
+  // Before calling DecisionBuilder::Next.
   virtual void BeginNextDecision(DecisionBuilder* const b);
 
   // After calling DecisionBuilder::Next, along with the returned decision.
   virtual void EndNextDecision(DecisionBuilder* const b, Decision* const d);
 
-  // Before applying the decision
+  // Before applying the decision.
   virtual void ApplyDecision(Decision* const d);
 
-  // Before refuting the Decision
+  // Before refuting the decision.
   virtual void RefuteDecision(Decision* const d);
 
   // Just after refuting or applying the decision, apply is true after Apply.
@@ -3612,8 +3657,8 @@ class SearchMonitor : public BaseObject {
   // After the initial propagation.
   virtual void EndInitialPropagation();
 
-  // This method is called when a solution is found. It asserts of the
-  // solution is valid. A value of false indicate that the solution
+  // This method is called when a solution is found. It asserts whether the
+  // solution is valid. A value of false indicates that the solution
   // should be discarded.
   virtual bool AcceptSolution();
 
@@ -3699,7 +3744,7 @@ class NumericalRev : public Rev<T> {
 };
 
 // Reversible array of POD types.
-// It Contains the stamp optimization. i.e. the SaveValue call is done only
+// It contains the stamp optimization. i.e. the SaveValue call is done only
 // once per node of the search tree.
 // Please note that actual stamps always starts at 1, thus an initial value of
 // 0 will always trigger the first SaveValue.
@@ -3757,7 +3802,7 @@ class NumericalRevArray : public RevArray<T> {
 
 // The class IntExpr is the base of all integer expressions in
 // constraint programming.
-// It Contains the basic protocol for an expression:
+// It contains the basic protocol for an expression:
 //   - setting and modifying its bound
 //   - querying if it is bound
 //   - listening to events modifying its bounds
@@ -3863,8 +3908,10 @@ class IntVarIterator : public BaseObject {
 #ifndef SWIG
 // Utility class to encapsulate an IntVarIterator and use it in a range-based
 // loop. See the code snippet above IntVarIterator.
-// Furthermore, it contains DEBUG_MODE-enabled code that DCHECKs that the
-// same iterator instance isn't being iterated on in several places at a time.
+//
+// It contains DEBUG_MODE-enabled code that DCHECKs that the
+// same iterator instance isn't being iterated on in multiple places
+// simultaneously.
 class InitAndGetValues {
  public:
   explicit InitAndGetValues(IntVarIterator* it)
@@ -3919,8 +3966,8 @@ class InitAndGetValues {
 #endif  // SWIG
 
 // The class IntVar is a subset of IntExpr. In addition to the
-// IntExpr protocol, it offers persistance,
-// removing values from the domains and a finer model for events
+// IntExpr protocol, it offers persistence, removing values from the domains,
+// and a finer model for events.
 class IntVar : public IntExpr {
  public:
   explicit IntVar(Solver* const s);
@@ -4023,7 +4070,7 @@ class IntVar : public IntExpr {
 
 // ---------- Solution Collectors ----------
 
-// This class is the root class of all solution collectors
+// This class is the root class of all solution collectors.
 // It implements a basic query API to be used independently
 // from the collector used.
 class SolutionCollector : public SearchMonitor {
@@ -4032,7 +4079,7 @@ class SolutionCollector : public SearchMonitor {
   explicit SolutionCollector(Solver* const s);
   ~SolutionCollector() override;
 
-  // Add API
+  // Add API.
   void Add(IntVar* const var);
   void Add(const std::vector<IntVar*>& vars);
   void Add(IntervalVar* const var);
@@ -4115,8 +4162,8 @@ class SolutionCollector : public SearchMonitor {
 
 // ---------- Objective Management ----------
 
-// This class encapsulate an objective. It requires the direction
-// (minimize or maximize), the variable to optimize and the
+// This class encapsulates an objective. It requires the direction
+// (minimize or maximize), the variable to optimize, and the
 // improvement step.
 class OptimizeVar : public SearchMonitor {
  public:
@@ -4128,7 +4175,7 @@ class OptimizeVar : public SearchMonitor {
 
   // Returns the variable that is optimized.
   IntVar* Var() const { return var_; }
-  // Internal methods
+  // Internal methods.
   void EnterSearch() override;
   void BeginNextDecision(DecisionBuilder* const db) override;
   void RefuteDecision(Decision* const d) override;
@@ -4175,10 +4222,10 @@ class SearchLimit : public SearchMonitor {
   // so one needs to be sure both SearchLimits are of the same type.
   virtual void Copy(const SearchLimit* const limit) = 0;
 
-  // Allocates a clone of the limit
+  // Allocates a clone of the limit.
   virtual SearchLimit* MakeClone() const = 0;
 
-  // Internal methods
+  // Internal methods.
   void EnterSearch() override;
   void BeginNextDecision(DecisionBuilder* const b) override;
   void PeriodicCheck() override;
@@ -4202,8 +4249,8 @@ class SearchLimit : public SearchMonitor {
 // ----- No Good ----
 
 // A nogood is a conjunction of unary constraints that represents a
-// state that must not be visited during search.  For instance if X
-// and Y are variables, (X == 5) && (Y != 3) is a nogood that forbid
+// state that must not be visited during search.  For instance, if X
+// and Y are variables, (X == 5) && (Y != 3) is a nogood that forbids
 // all part of the search tree where X is 5 and Y is not 3.
 class NoGood {
  public:
@@ -4249,7 +4296,7 @@ class NoGoodManager : public SearchMonitor {
   // Pretty Print.
   std::string DebugString() const override = 0;
 
-  // ----- Internal methods that links search events to the recorder API -----
+  // Internal methods that link search events to the recorder API.
   void EnterSearch() override;
   void BeginNextDecision(DecisionBuilder* const db) override;
   bool AcceptSolution() override;
@@ -4267,13 +4314,14 @@ class NoGoodManager : public SearchMonitor {
 
 // ---------- Interval Var ----------
 
-// An interval var is often used in scheduling. Its main
-// characteristics are its start position, its duration and its end
-// date. All these characteristics can be queried, set and demons can
-// be posted on their modifications.  An important aspect is
-// optionality. An interval var can be performed or not. If
-// unperformed, then it simply does not exist. Its characteristics
-// cannot be accessed anymore. An interval var is automatically marked
+// Interval variables are often used in scheduling. The main characteristics
+// of an IntervalVar are the start position, duration, and end
+// date. All these characteristics can be queried and set, and demons can
+// be posted on their modifications.
+//
+// An important aspect is optionality: an IntervalVar can be performed or not.
+// If unperformed, then it simply does not exist, and its characteristics
+// cannot be accessed any more. An interval var is automatically marked
 // as unperformed when it is not consistent anymore (start greater
 // than end, duration < 0...)
 class IntervalVar : public PropagationBaseObject {
@@ -4694,7 +4742,7 @@ class IntervalVarElement : public AssignmentElement {
 
 // ----- SequenceVarElement -----
 
-// The sequence var element stores a partial representation of ranked
+// The SequenceVarElement stores a partial representation of ranked
 // interval variables in the underlying sequence variable.
 // This representation consists of three vectors:
 //   - the forward sequence. That is the list of interval variables
@@ -4705,7 +4753,7 @@ class IntervalVarElement : public AssignmentElement {
 //     sequence is the last interval in the sequence variable.
 //   - The list of unperformed interval variables.
 //  Furthermore, if all performed variables are ranked, then by
-//  convention, the forward_sequence will contains all such variables
+//  convention, the forward_sequence will contain all such variables
 //  and the backward_sequence will be empty.
 class SequenceVarElement : public AssignmentElement {
  public:
@@ -4911,8 +4959,8 @@ class AssignmentContainer {
 
 // ----- Assignment -----
 
-// An Assignment is a variable -> domains mapping
-// It is used to report solutions to the user
+// An Assignment is a variable -> domains mapping, used
+// to report solutions to the user.
 class Assignment : public PropagationBaseObject {
  public:
   typedef AssignmentContainer<IntVar, IntVarElement> IntContainer;
@@ -5050,7 +5098,7 @@ class Assignment : public PropagationBaseObject {
   bool Contains(const IntVar* const var) const;
   bool Contains(const IntervalVar* const var) const;
   bool Contains(const SequenceVar* const var) const;
-  // Copies the intersection of the 2 assignments to the current assignment.
+  // Copies the intersection of the two assignments to the current assignment.
   void Copy(const Assignment* assignment);
 
   // TODO(user): Add iterators on elements to avoid exposing container class.

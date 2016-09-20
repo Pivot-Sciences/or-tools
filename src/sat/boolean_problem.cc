@@ -13,6 +13,8 @@
 
 #include "sat/boolean_problem.h"
 
+#include <math.h>
+
 #include "base/hash.h"
 
 #include "base/commandlineflags.h"
@@ -752,7 +754,8 @@ void ProbeAndSimplifyProblem(SatPostsolver* postsolver,
     }
 
     ITIVector<LiteralIndex, LiteralIndex> equiv_map;
-    ProbeAndFindEquivalentLiteral(&solver, postsolver, &equiv_map);
+    ProbeAndFindEquivalentLiteral(&solver, postsolver, /*drat_writer=*/nullptr,
+                                  &equiv_map);
 
     // We can abort if no information is learned.
     if (equiv_map.empty() && solver.LiteralTrail().Index() == 0) break;
