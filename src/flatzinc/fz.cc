@@ -38,6 +38,7 @@
 #include "flatzinc/solver.h"
 #include "flatzinc/solver_util.h"
 
+<<<<<<< HEAD
 DEFINE_int32(time_limit, 0, "time limit in ms.");
 DEFINE_bool(all_solutions, false, "Search for all solutions.");
 DEFINE_int32(num_solutions, 0,
@@ -71,9 +72,29 @@ DEFINE_string(file_prefix, "", "The file prefix for this sub problem being solve
 DEFINE_int32(objective_norm, -1, "The target objective value for this problem - on which we will normalise.");
 DEFINE_string(file_prefix, "", "The file suffix to add to the output objective");
 DEFINE_int32(objective_norm, -1, "The objective normalisation term");
+=======
+DEFINE_int32(log_period, 10000000, "Search log period");
+DEFINE_bool(all, false, "Search for all solutions");
+DEFINE_bool(free, false, "Ignore search annotations");
+DEFINE_bool(last_conflict, false, "Use last conflict search hints");
+DEFINE_int32(num_solutions, 0, "Number of solution to search for");
+DEFINE_int32(time_limit, 0, "time limit in ms");
+DEFINE_int32(workers, 0, "Number of workers");
+DEFINE_bool(use_impact, false, "Use impact based search");
+DEFINE_double(restart_log_size, -1, "Restart log size for impact search");
+DEFINE_int32(luby_restart, -1, "Luby restart factor, <= 0 = no luby");
+DEFINE_int32(heuristic_period, 100, "Period to call heuristics in free search");
+DEFINE_bool(verbose_impact, false, "Verbose impact");
+DEFINE_bool(verbose_mt, false, "Verbose Multi-Thread");
+DEFINE_bool(presolve, true, "Use presolve.");
+DEFINE_bool(read_from_stdin, false, "Read the FlatZinc from stdin, not from a file");
+DEFINE_string(file_prefix, "", "The file prefix for this sub problem being solved.");
+DEFINE_int32(objective_norm, -1, "The target objective value for this problem - on which we will normalise.");
+>>>>>>> 54e48f9c84afbe1d0dbc35b517880314be09cd3a
 
 DECLARE_bool(log_prefix);
 DECLARE_bool(fz_use_sat);
+
 
 
 using operations_research::ThreadPool;
@@ -107,7 +128,11 @@ FlatzincParameters SingleThreadParameters() {
   parameters.thread_id = -1;
   parameters.time_limit_in_ms = FLAGS_time_limit;
   parameters.verbose_impact = FLAGS_verbose_impact;
+<<<<<<< HEAD
   return parameters;
+=======
+  parameters.worker_id = -1;
+>>>>>>> 54e48f9c84afbe1d0dbc35b517880314be09cd3a
   parameters.search_type = FLAGS_use_impact ? FzSolverParameters::IBS : FzSolverParameters::DEFAULT;
 
   std::unique_ptr<FzParallelSupportInterface> parallel_support(

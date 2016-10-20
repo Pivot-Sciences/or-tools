@@ -410,6 +410,16 @@ bool Presolver::Unreify(Constraint* ct, std::string* log) {
     ct->RemoveTargetVariable();
     ct->arguments.pop_back();
   } else if (ct->type == "set_in" || ct->type == "set_not_in") {
+<<<<<<< HEAD
+=======
+    // Rule 2.
+    FZVLOG << "Unreify and inverse " << ct->DebugString() << FZENDL;
+    ct->RemoveTargetVariable();
+    ct->arguments.pop_back();
+    ct->type.resize(ct->type.size() - 2);
+    ct->type += "not_in";
+  } else {
+>>>>>>> 54e48f9c84afbe1d0dbc35b517880314be09cd3a
     // Rule 2.
     FZVLOG << "Unreify and inverse " << ct->DebugString() << FZENDL;
     ct->RemoveTargetVariable();
@@ -1881,6 +1891,7 @@ bool Presolver::PropagateReifiedComparisons(Constraint* ct, std::string* log) {
         if (var->Min() > value) {
           state = 1;
         } else if (var->Max() <= value) {
+<<<<<<< HEAD
           state = 0;
         }
       } else if ((((id == "int_lt_reif" || id == "bool_lt_reif") && !reverse) ||
@@ -1907,6 +1918,34 @@ bool Presolver::PropagateReifiedComparisons(Constraint* ct, std::string* log) {
         } else if (var->Min() > value) {
           state = 0;
         }
+=======
+          state = 0;
+        }
+      } else if ((((id == "int_lt_reif" || id == "bool_lt_reif") && !reverse) ||
+                  ((id == "int_gt_reif" || id == "bool_gt_reif") && reverse)) &&
+                 !var->IsAllInt64()) {  // int_lt
+        if (var->Max() < value) {
+          state = 1;
+        } else if (var->Min() >= value) {
+          state = 0;
+        }
+      } else if ((((id == "int_le_reif" || id == "bool_le_reif") && reverse) ||
+                  ((id == "int_ge_reif" || id == "bool_ge_reif") && !reverse)) &&
+                 !var->IsAllInt64()) {  // int_ge
+        if (var->Min() >= value) {
+          state = 1;
+        } else if (var->Max() < value) {
+          state = 0;
+        }
+      } else if ((((id == "int_le_reif" || id == "bool_le_reif") && !reverse) ||
+                  ((id == "int_ge_reif" || id == "bool_ge_reif") && reverse)) &&
+                 !var->IsAllInt64()) {  // int_le
+        if (var->Max() <= value) {
+          state = 1;
+        } else if (var->Min() > value) {
+          state = 0;
+        }
+>>>>>>> 54e48f9c84afbe1d0dbc35b517880314be09cd3a
       }
       if (state != 2) {
         FZVLOG << "Assign boolvar to " << state << " in " << ct->DebugString()
@@ -3148,5 +3187,9 @@ void Presolver::CleanUpModelForTheCpSolver(Model* model, bool use_sat) {
     }
   }
 }
+<<<<<<< HEAD
 }  // namespace fz
 }  // namespace operations_research
+=======
+}  // namespace operations_research
+>>>>>>> 54e48f9c84afbe1d0dbc35b517880314be09cd3a
