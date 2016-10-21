@@ -188,7 +188,12 @@ class Set {
   }
 
   // Returns the set consisting of the smallest element of the calling object.
-  Set SmallestSingleton() const { return Set(value_ & -value_); }
+  Set SmallestSingleton() const {
+		#ifdef WIN32
+		#pragma warning(disable:4146)
+		#endif
+		return Set(value_ & -value_); 
+	}
 
   // Returns the rank of the singleton's element in the calling Set.
   int SingletonRank(Set singleton) const {

@@ -1661,6 +1661,9 @@ class SimpleBitSet : public DomainIntVar::BitSet {
         omin_;
     const uint64 removed_bits =
         BitCountRange64(bits_, cmin - omin_, new_min - omin_ - 1);
+		#ifdef WIN32
+		#pragma warning(disable:4146)
+		#endif
     size_.Add(solver_, -removed_bits);
     return new_min;
   }
@@ -1676,6 +1679,9 @@ class SimpleBitSet : public DomainIntVar::BitSet {
         omin_;
     const uint64 removed_bits =
         BitCountRange64(bits_, new_max - omin_ + 1, cmax - omin_);
+		#ifdef WIN32
+		#pragma warning(disable:4146)
+		#endif
     size_.Add(solver_, -removed_bits);
     return new_max;
   }
