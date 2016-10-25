@@ -28,7 +28,7 @@
 #else
 #include <fenv.h>  // NOLINT
 #endif
-#if !defined(__ANDROID__) && !defined(__APPLE__) && !defined(_MSC_VER) && !defined(__APLINE__)
+#if !defined(__ANDROID__) && !defined(__APPLE__) && !defined(_MSC_VER) && !defined(__ALPINE__)
 #include <fpu_control.h>
 #endif
 
@@ -114,7 +114,7 @@ class ScopedFloatingPointEnv {
 #endif
 
 #if (defined(__i386__) || defined(__x86_64__)) && defined(__linux__) && !defined(__ANDROID__)
-#if (!defined(__APLINE__))
+#if (!defined(__ALPINE__))
 inline fpu_control_t GetFPPrecision() {
   fpu_control_t status = 0;  // Initialized to zero to please memory sanitizer.
   _FPU_GETCW(status);
