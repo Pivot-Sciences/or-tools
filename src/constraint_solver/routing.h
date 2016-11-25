@@ -987,6 +987,10 @@ class RoutingModel {
   int64 GetEndCumulVarSoftUpperBound(int, const std::string&) const;
   int64 GetEndCumulVarSoftUpperBoundCoefficient(int, const std::string&) const;
 
+	const std::vector<IntVar*>& GetIsBoundToEndVars(){
+		return is_bound_to_end_;
+	}
+
   // The next few members are in the public section only for testing purposes.
   // TODO(user): Find a way to test and restrict the access at the same time.
   //
