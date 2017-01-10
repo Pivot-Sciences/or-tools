@@ -820,6 +820,17 @@ class RoutingModel {
   int64 Next(const Assignment& assignment, int64 index) const;
   // Returns true if the route of 'vehicle' is non empty in 'assignment'.
   bool IsVehicleUsed(const Assignment& assignment, int vehicle) const;
+  
+  void SetLKHSequence(std::vector<int>* optimisedNexts){
+	for(int i =0 ; i < optimisedNexts->size(); i++){
+		lkhSequence_.push_back(optimisedNexts->at(i));
+    }
+  }
+  
+  const std::vector<int>& GetLKHSequence(){
+	  return(lkhSequence_);
+  }
+  
 // Variables
 #if !defined(SWIGPYTHON)
   // Returns all next variables of the model, such that Nexts(i) is the next
@@ -1217,6 +1228,8 @@ class RoutingModel {
   std::vector<IntVar*> nexts_;
   std::vector<IntVar*> vehicle_vars_;
   std::vector<IntVar*> active_;
+  std::vector<int> lkhSequence_;
+  
   // is_bound_to_end_[i] will be true iff the path starting at var #i is fully
   // bound and reaches the end of a route, i.e. either:
   // - IsEnd(i) is true

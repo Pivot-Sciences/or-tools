@@ -2933,6 +2933,59 @@ void GetVehicleClasses(const RoutingModel& model,
   }
 }
 
+
+
+// Desicion Builder building a first solution based on the results of an near-optimal 
+// chained-LKH tour for Vehicle Routing Problem.
+class LKHBuilder : public DecisionBuilder {
+ public:
+  LKHBuilder(RoutingModel* const model, bool check_assignment)
+      : model_(model), check_assignment_(check_assignment) {}
+  ~LKHBuilder() override {}
+
+  Decision* Next(Solver* const solver) override {
+    // Setup the model of the instance for the Savings Algorithm
+    ModelSetup();
+
+    // Create the Savings List
+    CreateSavingsList();
+
+    // Build the assignment routes CreateSavingsListfor the model
+    Assignment* const assignment = solver->MakeAssignment();
+    route_constructor_.reset(new RouteConstructor(assignment, model_, check_assignment_, nodes_number_, savings_list_, vehicle_classes_));
+    // This call might cause backtracking if the search limit is reached.
+	
+    route_constructor_->Construct();
+    route_constructor_.reset(nullptr);
+    // This call might cause backtracking if the solution is not feasible.
+    assignment->Restore();
+
+    return nullptr;
+  }
+
+ private:
+  void ModelSetup() {
+    
+  }
+
+  void CreateSavingsList() {
+   
+  }
+
+  RoutingModel* const model_;
+  std::unique_ptr<RouteConstructor> route_constructor_;
+  const bool check_assignment_;
+  std::vector<std::string> dimensions_;
+  int64 nodes_number_;
+  std::vector<std::vector<int64>> costs_;
+  std::vector<std::vector<int>> neighbors_;
+  std::vector<Link> savings_list_;
+  double route_shape_parameter_;
+  std::vector<VehicleClass> vehicle_classes_;
+};
+
+
+
 // Desicion Builder building a first solution based on Savings (Clarke & Wright)
 // heuristic for Vehicle Routing Problem.
 class SavingsBuilder : public DecisionBuilder {
@@ -2948,7 +3001,7 @@ class SavingsBuilder : public DecisionBuilder {
     // Create the Savings List
     CreateSavingsList();
 
-    // Build the assignment routes for the model
+    // Build the assignment routes CreateSavingsListfor the model
     Assignment* const assignment = solver->MakeAssignment();
     route_constructor_.reset(
         new RouteConstructor(assignment, model_, check_assignment_,
