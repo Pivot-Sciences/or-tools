@@ -2939,49 +2939,173 @@ void GetVehicleClasses(const RoutingModel& model,
 // chained-LKH tour for Vehicle Routing Problem.
 class LKHBuilder : public DecisionBuilder {
  public:
-  LKHBuilder(RoutingModel* const model, bool check_assignment)
-      : model_(model), check_assignment_(check_assignment) {}
-  ~LKHBuilder() override {}
+	LKHBuilder(RoutingModel* const model, bool check_assignment)
+	  : model_(model), check_assignment_(check_assignment), solver_(model_->solver()), 
+	        nexts_(model_->Nexts()) {}
+	~LKHBuilder() override {}
 
-  Decision* Next(Solver* const solver) override {
-    // Setup the model of the instance for the Savings Algorithm
-    ModelSetup();
+	Decision* Next(Solver* const solver) override {
+		VLOG(0) << "Runnng LKH Seeding";
 
-    // Create the Savings List
-    CreateSavingsList();
+		std::vector<int> lkhseq = model_->GetLKHSequence();
+		//this sequence is a tour, we need to translate into a pointer sequence we can use nicely.
+		std::vector<int> lkhnexts;
+		for(int i =0 ; i < lkhseq.size(); i++){
+			lkhnexts.push_back(-1);
+		} //check everything is assigned at the end.
+		//we have to read between the pairs.
+		for(int i = 1 ; i < lkhseq.size(); i++){
+			lkhnexts[lkhseq[i-1]]=lkhseq[i];
+		}
+		lkhnexts[lkhseq[lkhseq.size() -1]] = lkhseq[0];
+		std::vector<bool> attempted;//to keep track of which nodes have been tried and failed.
+		for(int i =0 ; i < lkhnexts.size(); i++){
+			attempted.push_back(false);
+			if(lkhnexts[i] ==  -1){
+				VLOG(0) << "LKH Seeding failure. Incomplete path provided";
+			}
+		}
 
-    // Build the assignment routes CreateSavingsListfor the model
-    Assignment* const assignment = solver->MakeAssignment();
-    route_constructor_.reset(new RouteConstructor(assignment, model_, check_assignment_, nodes_number_, savings_list_, vehicle_classes_));
-    // This call might cause backtracking if the search limit is reached.
-	
-    route_constructor_->Construct();
-    route_constructor_.reset(nullptr);
-    // This call might cause backtracking if the solution is not feasible.
-    assignment->Restore();
+		//so the way this seeding heuristic is going to work is to identify the largest edge
+		//in the optimal sequence, and commence with that as the start of a route. We're then 
+		//going to grow the route in whichever direction has the next largest edge. We can optimise the 
+		//data structure around this after the fact, lets check how well it works first.
+		//we should get all the tour edge costs, sort, then we mark which nodes have been processed
+		//and remove from the top of the list until it is empty.
 
-    return nullptr;
-  }
+		//as a first pass, we can just walk the tour from the closest point to a vehicle and see if
+		//we can get a solution. Lets try just one point first at random?
+		Assignment* const temp_assignment = solver->MakeAssignment();
+		Assignment* const assignment = solver->MakeAssignment(); //this will be the final assignment we restore
+		//we're going to attempt new assignments in temp_assignment. If they work, we'll add them to 
+		//the main assignment. This should have some kind of flag to check for between-stop dependencies.
+		std::vector<IntVar*> vehicles = model_->VehicleVars();
+		std::vector<int> openChains;
+		
+		int tail1 = 0;
+		int head1 = 0;
+		int vehicle = 0;
+		
+		//lets start with the stop closest to the starting vehicle.
+		
+		const int size = model_->Size(); //this is the size of the number of delivery points.
+		//const int numvehicles =  model_->vehicle_ends_.size();
+		int feasiblecount = 0;
+		while(!attempted[head1]){
+			if(tail1 == head1){
+				temp_assignment->Add(model_->NextVar(model_->Start(vehicle)));
+				temp_assignment->SetValue(model_->NextVar(model_->Start(vehicle)), tail1);
+			}else{
+				//update the second last point in the route to point to the head (so growing forward looking)
+				//temp_assignment->Add(nexts_[tail1]); //technically already added, so just overriding the value.
+				temp_assignment->SetValue(nexts_[tail1], head1);
+			}
+			
+			temp_assignment->Add(nexts_[head1]);
+			temp_assignment->SetValue(nexts_[head1], model_->End(vehicle));
+			//lets try just assigning one stop (the first) to a vehicle and see if that is feasible or not.
+			
+			bool feasible = solver_->Solve(solver_->MakeRestoreAssignment(temp_assignment));
+
+			if(feasible){
+				feasiblecount++;
+				if(tail1 == head1){
+					openChains.push_back(vehicle);
+					//then add the vehicle variable
+					assignment->Add(model_->NextVar(model_->Start(vehicle)));
+					assignment->SetValue(model_->NextVar(model_->Start(vehicle)), tail1);
+				}else{
+					assignment->SetValue(nexts_[tail1], head1);
+				}
+				assignment->Add(nexts_[head1]);
+				assignment->SetValue(nexts_[head1], model_->End(vehicle));	
+				//VLOG(0) << "assignement was feasible! weo weo ";
+				attempted[head1] = true;
+				tail1 = head1; //so keep track of the second last visite.
+				head1 = lkhnexts[head1];
+				
+			}else{
+				VLOG(0) << feasiblecount << " assignments made before failure.";
+				if(feasiblecount == 0){
+					//then we've hit the problem before for the same point, 
+					//and incrementing the vehicle didn't help.
+					break;
+					//so we can set this point to be unassigned and try the next point.
+				}
+				
+				feasiblecount = 0;
+				//then we need to try a new vehicle.
+				temp_assignment->Clear();
+				vehicle++;
+				tail1 = head1;//we're going to start a new route with these assignments.
+				
+				if(vehicle >= vehicles.size()){
+					//set any orders not attempted to dropped status so that we can make this restore feasibly.
+					
+					break;// we've exhausted our options here.
+				}
+				
+				
+			}
+			
+		}
+
+		//just do it.
+		assignment->Restore();
+
+		return nullptr;
+	}
 
  private:
-  void ModelSetup() {
-    
-  }
+	void ModelSetup() {
 
-  void CreateSavingsList() {
-   
-  }
+	}
 
-  RoutingModel* const model_;
-  std::unique_ptr<RouteConstructor> route_constructor_;
-  const bool check_assignment_;
-  std::vector<std::string> dimensions_;
-  int64 nodes_number_;
-  std::vector<std::vector<int64>> costs_;
-  std::vector<std::vector<int>> neighbors_;
-  std::vector<Link> savings_list_;
-  double route_shape_parameter_;
-  std::vector<VehicleClass> vehicle_classes_;
+	void CreateSavingsList() {
+
+	}
+  
+	bool CheckTempAssignment(Assignment* const temp_assignment,
+						   int new_chain_index, int old_chain_index, int head1,
+						   int tail1, int head2, int tail2) {
+		const int start = head1;
+		temp_assignment->Add(model_->NextVar(model_->Start(new_chain_index)));
+		temp_assignment->SetValue(model_->NextVar(model_->Start(new_chain_index)),start);
+		temp_assignment->Add(nexts_[tail1]);
+		temp_assignment->SetValue(nexts_[tail1], head2);
+		temp_assignment->Add(nexts_[tail2]);
+		temp_assignment->SetValue(nexts_[tail2], model_->End(new_chain_index));
+		
+		//this seems to run through all the chains and check where mergers have happened.
+		//then collate those together.
+		//for (int chain_index = 0; chain_index < chains_.size(); ++chain_index) {
+		  //if ((chain_index != new_chain_index) &&
+			  //(chain_index != old_chain_index) &&
+			 // (!ContainsKey(deleted_chains_, chain_index))) {
+			//const int nstart = chains_[chain_index].head;
+			//const int end = chains_[chain_index].tail;
+			
+			//temp_assignment->Add(model_->NextVar(model_->Start(chain_index)));
+			//temp_assignment->SetValue(model_->NextVar(model_->Start(chain_index)), nstart);
+			//temp_assignment->Add(nexts_[end]);
+			//temp_assignment->SetValue(nexts_[end], model_->End(chain_index));
+		  //}
+		//}
+		return solver_->Solve(solver_->MakeRestoreAssignment(temp_assignment));
+	}
+
+	RoutingModel* const model_;
+	Solver* const solver_;
+	std::unique_ptr<RouteConstructor> route_constructor_;
+	const bool check_assignment_;
+	std::vector<std::string> dimensions_;
+	int64 nodes_number_;
+	std::vector<std::vector<int64>> costs_;
+	std::vector<std::vector<int>> neighbors_;
+	std::vector<Link> savings_list_;
+	std::vector<IntVar*> nexts_;
+	double route_shape_parameter_;
+	std::vector<VehicleClass> vehicle_classes_;
 };
 
 
@@ -4742,6 +4866,13 @@ void RoutingModel::CreateFirstSolutionDecisionBuilders(
   first_solution_decision_builders_[FirstSolutionStrategy::CHRISTOFIDES] =
       solver_->RevAlloc(new ChristofidesFilteredDecisionBuilder(
           this, GetOrCreateFeasibilityFilters()));
+  //lkh path
+  first_solution_decision_builders_[FirstSolutionStrategy::LKH_PATH] = 
+	 solver_->RevAlloc(new LKHBuilder(this, true)); 
+	 //always run this in check assignment mode. [rb] it's not clear to me when
+	 //it would be okay not to check side constraints. It feels like you're looking
+	 //for trouble if you do.
+  
   // Automatic
   // TODO(user): make this smarter.
   first_solution_decision_builders_[FirstSolutionStrategy::AUTOMATIC] =

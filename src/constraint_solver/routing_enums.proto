@@ -61,7 +61,10 @@ message FirstSolutionStrategy {
     // the travelling salesman problem, Report 388, Graduate School of
     // Industrial Administration, CMU, 1976.
     CHRISTOFIDES = 13;
-
+	// A heuristic that uses the near-optimal TSP path and then allocates greedily 
+	// to vehicles during the route construction phase. This is useful when the number
+	// of stops relative to the number of vehilces is very high (sequence in important)
+	LKH_PATH = 14;
     // --- Path insertion heuristics ---
     // Make all nodes inactive. Only finds a solution if nodes are optional (are
     // element of a disjunction constraint with a finite penalty cost).
