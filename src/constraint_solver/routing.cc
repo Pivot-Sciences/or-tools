@@ -2987,8 +2987,18 @@ class LKHBuilder : public DecisionBuilder {
 		int vehicle = 0;
 		
 		//lets start with the stop closest to the starting vehicle.
-		
 		const int size = model_->Size(); //this is the size of the number of delivery points.
+		int startingVehicleNode = model_->Start(vehicle);
+		int mCost = INT_MAX;
+		for(int i = 0; i < lkhnexts.size(); i++){
+			  const int64 cost = model_->GetHomogeneousCost(startingVehicleNode, lkhnexts[i]);
+			  if(cost < mCost){
+				  mCost = cost;
+				  head1 = i;
+				  tail1 = i;
+			  }
+		}
+		
 		//const int numvehicles =  model_->vehicle_ends_.size();
 		int feasiblecount = 0;
 		while(!attempted[head1]){
@@ -3041,11 +3051,8 @@ class LKHBuilder : public DecisionBuilder {
 				
 				if(vehicle >= vehicles.size()){
 					//set any orders not attempted to dropped status so that we can make this restore feasibly.
-					
 					break;// we've exhausted our options here.
 				}
-				
-				
 			}
 			
 		}
