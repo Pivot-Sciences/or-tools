@@ -2947,7 +2947,13 @@ class LKHBuilder : public DecisionBuilder {
 	Decision* Next(Solver* const solver) override {
 		VLOG(0) << "Runnng LKH Seeding";
 
-		std::vector<int> lkhseq = model_->GetLKHSequence();
+		//calls up to separately compiled algorithm
+		VLOG(0) << "result from callback : " << model_->GetSeederCallback()->Run(model_, solver_);
+		
+		
+		std::vector<int> lkhseq;// = model_->GetLKHSequence();
+		
+		
 		//this sequence is a tour, we need to translate into a pointer sequence we can use nicely.
 		std::vector<int> lkhnexts;
 		for(int i =0 ; i < lkhseq.size(); i++){

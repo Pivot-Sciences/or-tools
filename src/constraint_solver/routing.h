@@ -220,6 +220,7 @@ class RoutingModel {
   typedef _RoutingModel_DisjunctionIndex DisjunctionIndex;
   typedef _RoutingModel_VehicleClassIndex VehicleClassIndex;
   typedef ResultCallback2<int64, NodeIndex, NodeIndex> NodeEvaluator2;
+  typedef ResultCallback2<int64, RoutingModel *, Solver *> SeedingCallback;
   typedef std::function<int64(int64, int64)> TransitEvaluator2;
   typedef std::pair<int, int> NodePair;
   typedef std::vector<NodePair> NodePairs;
@@ -821,14 +822,15 @@ class RoutingModel {
   // Returns true if the route of 'vehicle' is non empty in 'assignment'.
   bool IsVehicleUsed(const Assignment& assignment, int vehicle) const;
   
-  void SetLKHSequence(std::vector<int>* optimisedNexts){
-	for(int i =0 ; i < optimisedNexts->size(); i++){
-		lkhSequence_.push_back(optimisedNexts->at(i));
-    }
+  void SetSeederCallback(SeedingCallback* cb){
+	  gpSeeder_ = cb;
+	//for(int i =0 ; i < optimisedNexts->size(); i++){
+	//	lkhSequence_.push_back(optimisedNexts->at(i));
+    //}
   }
   
-  const std::vector<int>& GetLKHSequence(){
-	  return(lkhSequence_);
+  SeedingCallback* GetSeederCallback(){
+	  return(gpSeeder_);
   }
   
 // Variables
@@ -1228,7 +1230,8 @@ class RoutingModel {
   std::vector<IntVar*> nexts_;
   std::vector<IntVar*> vehicle_vars_;
   std::vector<IntVar*> active_;
-  std::vector<int> lkhSequence_;
+  SeedingCallback* gpSeeder_;
+  //std::vector<int> lkhSequence_;
   
   // is_bound_to_end_[i] will be true iff the path starting at var #i is fully
   // bound and reaches the end of a route, i.e. either:
