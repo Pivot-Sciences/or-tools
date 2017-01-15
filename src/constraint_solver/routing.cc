@@ -5005,6 +5005,11 @@ void RoutingModel::SetCost(NodeEvaluator2* e) {
 void RoutingModel::SetVehicleCost(int v, NodeEvaluator2* e) {
   return SetArcCostEvaluatorOfVehicle(e, v);
 }
+
+RoutingModel::NodeEvaluator2* RoutingModel::GetVehicleCost(int v){
+	return(transit_cost_of_vehicle_[v]);
+}
+
 int64 RoutingModel::GetRouteFixedCost() const {
   return GetFixedCostOfVehicle(0);
 }

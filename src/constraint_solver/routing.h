@@ -962,6 +962,9 @@ class RoutingModel {
   void SetCost(NodeEvaluator2* e);  // SetArcCostEvaluatorOfAllVehicles()
   // SetArcCostEvaluatorOfVehicle()
   void SetVehicleCost(int v, NodeEvaluator2* e);
+  
+  NodeEvaluator2* GetVehicleCost(int v);   
+  
   int64 GetRouteFixedCost() const;           // GetFixedCostOfVehicle()
   void SetRouteFixedCost(int64 c);           // SetFixedCostOfAllVehicles()
   int64 GetVehicleFixedCost(int v) const;    // GetFixedCostOfVehicle()
