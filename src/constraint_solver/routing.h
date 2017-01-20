@@ -833,6 +833,14 @@ class RoutingModel {
 	  return(gpSeeder_);
   }
   
+  void SetLSO(LocalSearchOperator * lso){
+	  lsoOperator_ = lso;
+  }
+  
+  LocalSearchOperator * GetLSO(){
+	  return (lsoOperator_);
+  }
+  
 // Variables
 #if !defined(SWIGPYTHON)
   // Returns all next variables of the model, such that Nexts(i) is the next
@@ -1043,6 +1051,8 @@ class RoutingModel {
   DecisionBuilder* MakeSelfDependentDimensionFinalizer(
       const RoutingDimension* dimension);
 
+  std::function<int(int64)> vehicle_start_class_callback_;
+
  private:
   // Local search move operator usable in routing.
   enum RoutingLocalSearchOperator {
@@ -1226,6 +1236,8 @@ class RoutingModel {
 
   // Model
   std::unique_ptr<Solver> solver_;
+  
+
   int nodes_;
   int vehicles_;
   Constraint* no_cycle_constraint_;
@@ -1234,6 +1246,8 @@ class RoutingModel {
   std::vector<IntVar*> vehicle_vars_;
   std::vector<IntVar*> active_;
   SeedingCallback* gpSeeder_;
+  LocalSearchOperator* lsoOperator_;
+  
   //std::vector<int> lkhSequence_;
   
   // is_bound_to_end_[i] will be true iff the path starting at var #i is fully
@@ -1261,7 +1275,7 @@ class RoutingModel {
 #ifndef SWIG
   ITIVector<VehicleClassIndex, VehicleClass> vehicle_classes_;
 #endif  // SWIG
-  std::function<int(int64)> vehicle_start_class_callback_;
+  
   // Cached callbacks
   hash_map<const NodeEvaluator2*, NodeEvaluator2*> cached_node_callbacks_;
   hash_map<const VariableNodeEvaluator2*, VariableNodeEvaluator2*>

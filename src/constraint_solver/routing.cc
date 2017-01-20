@@ -4764,11 +4764,22 @@ void RoutingModel::CreateFirstSolutionDecisionBuilders(
       solver_->RevAlloc(new ChristofidesFilteredDecisionBuilder(
           this, GetOrCreateFeasibilityFilters()));
   //lkh path
-  first_solution_decision_builders_[FirstSolutionStrategy::LKH_PATH] = 
-	 solver_->RevAlloc(new LKHBuilder(this, true)); 
-	 //always run this in check assignment mode. [rb] it's not clear to me when
-	 //it would be okay not to check side constraints. It feels like you're looking
-	 //for trouble if you do.
+  //first_solution_decision_builders_[FirstSolutionStrategy::LKH_PATH] = 
+  //	 solver_->RevAlloc(new LKHBuilder(this, true)); 
+  //always run this in check assignment mode. [rb] it's not clear to me when
+  //it would be okay not to check side constraints. It feels like you're looking
+  //for trouble if you do.
+	LocalSearchPhaseParameters* const lkh_insertion_parameters =
+	  solver_->MakeLocalSearchPhaseParameters(GetLSO(),// CreateInsertionOperator(),
+											  finalize, ls_limit,
+											  GetOrCreateLocalSearchFilters());
+
+  first_solution_decision_builders_[FirstSolutionStrategy::LKH_PATH] =
+      solver_->MakeNestedOptimize(
+          solver_->MakeLocalSearchPhase(decision_vars, solver_->RevAlloc(new AllUnperformed(this)),
+              lkh_insertion_parameters), GetOrCreateAssignment(), false, search_parameters.optimization_step(), monitors);
+  first_solution_decision_builders_[FirstSolutionStrategy::LKH_PATH] =
+      solver_->Compose(first_solution_decision_builders_[FirstSolutionStrategy::LKH_PATH], finalize);
   
   // Automatic
   // TODO(user): make this smarter.
