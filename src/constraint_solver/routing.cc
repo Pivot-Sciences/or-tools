@@ -2935,77 +2935,6 @@ void GetVehicleClasses(const RoutingModel& model,
 
 
 
-// Desicion Builder building a first solution based on the results of an near-optimal 
-// chained-LKH tour for Vehicle Routing Problem.
-class LKHBuilder : public DecisionBuilder {
- public:
-	LKHBuilder(RoutingModel* const model, bool check_assignment)
-	  : model_(model), check_assignment_(check_assignment), solver_(model_->solver()), 
-	        nexts_(model_->Nexts()) {}
-	~LKHBuilder() override {}
-
-	Decision* Next(Solver* const solver) override {
-		VLOG(0) << "Runnng LKH Seeding";
-
-		//calls up to separately compiled algorithm
-		int res = model_->GetSeederCallback()->Run(model_, solver_);
-		
-		return nullptr;
-	}
-
- private:
-	void ModelSetup() {
-
-	}
-
-	void CreateSavingsList() {
-
-	}
-  
-	bool CheckTempAssignment(Assignment* const temp_assignment,
-						   int new_chain_index, int old_chain_index, int head1,
-						   int tail1, int head2, int tail2) {
-		const int start = head1;
-		temp_assignment->Add(model_->NextVar(model_->Start(new_chain_index)));
-		temp_assignment->SetValue(model_->NextVar(model_->Start(new_chain_index)),start);
-		temp_assignment->Add(nexts_[tail1]);
-		temp_assignment->SetValue(nexts_[tail1], head2);
-		temp_assignment->Add(nexts_[tail2]);
-		temp_assignment->SetValue(nexts_[tail2], model_->End(new_chain_index));
-		
-		//this seems to run through all the chains and check where mergers have happened.
-		//then collate those together.
-		//for (int chain_index = 0; chain_index < chains_.size(); ++chain_index) {
-		  //if ((chain_index != new_chain_index) &&
-			  //(chain_index != old_chain_index) &&
-			 // (!ContainsKey(deleted_chains_, chain_index))) {
-			//const int nstart = chains_[chain_index].head;
-			//const int end = chains_[chain_index].tail;
-			
-			//temp_assignment->Add(model_->NextVar(model_->Start(chain_index)));
-			//temp_assignment->SetValue(model_->NextVar(model_->Start(chain_index)), nstart);
-			//temp_assignment->Add(nexts_[end]);
-			//temp_assignment->SetValue(nexts_[end], model_->End(chain_index));
-		  //}
-		//}
-		return solver_->Solve(solver_->MakeRestoreAssignment(temp_assignment));
-	}
-
-	RoutingModel* const model_;
-	Solver* const solver_;
-	std::unique_ptr<RouteConstructor> route_constructor_;
-	const bool check_assignment_;
-	std::vector<std::string> dimensions_;
-	int64 nodes_number_;
-	std::vector<std::vector<int64>> costs_;
-	std::vector<std::vector<int>> neighbors_;
-	std::vector<Link> savings_list_;
-	std::vector<IntVar*> nexts_;
-	double route_shape_parameter_;
-	std::vector<VehicleClass> vehicle_classes_;
-};
-
-
 
 // Desicion Builder building a first solution based on Savings (Clarke & Wright)
 // heuristic for Vehicle Routing Problem.
@@ -4769,18 +4698,23 @@ void RoutingModel::CreateFirstSolutionDecisionBuilders(
   //always run this in check assignment mode. [rb] it's not clear to me when
   //it would be okay not to check side constraints. It feels like you're looking
   //for trouble if you do.
-	LocalSearchPhaseParameters* const lkh_insertion_parameters =
-	  solver_->MakeLocalSearchPhaseParameters(GetLSO(),// CreateInsertionOperator(),
-											  finalize, ls_limit,
-											  GetOrCreateLocalSearchFilters());
 
-  first_solution_decision_builders_[FirstSolutionStrategy::LKH_PATH] =
-      solver_->MakeNestedOptimize(
-          solver_->MakeLocalSearchPhase(decision_vars, solver_->RevAlloc(new AllUnperformed(this)),
-              lkh_insertion_parameters), GetOrCreateAssignment(), false, search_parameters.optimization_step(), monitors);
-  first_solution_decision_builders_[FirstSolutionStrategy::LKH_PATH] =
-      solver_->Compose(first_solution_decision_builders_[FirstSolutionStrategy::LKH_PATH], finalize);
-  
+	//some quick notes; LNS is a terrible idea for seeding heuristic. Most of the or-tools heuristics are n^3 or n^4 (worst case)
+	//in some instances. It's fine for modifying a solution, but not building one up with multiple tiers of depedencies.
+	//RoutingFilteredDecisionBuilder looks like the best path to follow.
+//	LocalSearchPhaseParameters* const lkh_insertion_parameters =
+//	  solver_->MakeLocalSearchPhaseParameters(GetLSO(),// CreateInsertionOperator(),
+//											  finalize, ls_limit,
+//											  GetOrCreateLocalSearchFilters());
+//
+//  first_solution_decision_builders_[FirstSolutionStrategy::LKH_PATH] =
+//      solver_->MakeNestedOptimize(
+//          solver_->MakeLocalSearchPhase(decision_vars, solver_->RevAlloc(new AllUnperformed(this)),
+//              lkh_insertion_parameters), GetOrCreateAssignment(), false, search_parameters.optimization_step(), monitors);
+//  first_solution_decision_builders_[FirstSolutionStrategy::LKH_PATH] =
+//      solver_->Compose(first_solution_decision_builders_[FirstSolutionStrategy::LKH_PATH], finalize);
+  first_solution_decision_builders_[FirstSolutionStrategy::LKH_PATH] = GetSeederCallback();
+		
   // Automatic
   // TODO(user): make this smarter.
   first_solution_decision_builders_[FirstSolutionStrategy::AUTOMATIC] =

@@ -220,7 +220,6 @@ class RoutingModel {
   typedef _RoutingModel_DisjunctionIndex DisjunctionIndex;
   typedef _RoutingModel_VehicleClassIndex VehicleClassIndex;
   typedef ResultCallback2<int64, NodeIndex, NodeIndex> NodeEvaluator2;
-  typedef ResultCallback2<int64, RoutingModel *, Solver *> SeedingCallback;
   typedef std::function<int64(int64, int64)> TransitEvaluator2;
   typedef std::pair<int, int> NodePair;
   typedef std::vector<NodePair> NodePairs;
@@ -822,14 +821,14 @@ class RoutingModel {
   // Returns true if the route of 'vehicle' is non empty in 'assignment'.
   bool IsVehicleUsed(const Assignment& assignment, int vehicle) const;
   
-  void SetSeederCallback(SeedingCallback* cb){
+  void SetSeederCallback(DecisionBuilder* cb){
 	  gpSeeder_ = cb;
 	//for(int i =0 ; i < optimisedNexts->size(); i++){
 	//	lkhSequence_.push_back(optimisedNexts->at(i));
     //}
   }
-  
-  SeedingCallback* GetSeederCallback(){
+    
+  DecisionBuilder* GetSeederCallback(){
 	  return(gpSeeder_);
   }
   
@@ -1053,6 +1052,8 @@ class RoutingModel {
 
   std::function<int(int64)> vehicle_start_class_callback_;
 
+  const std::vector<LocalSearchFilter*>& GetOrCreateFeasibilityFilters();
+
  private:
   // Local search move operator usable in routing.
   enum RoutingLocalSearchOperator {
@@ -1202,7 +1203,7 @@ class RoutingModel {
   LocalSearchOperator* GetNeighborhoodOperators(
       const RoutingSearchParameters& search_parameters) const;
   const std::vector<LocalSearchFilter*>& GetOrCreateLocalSearchFilters();
-  const std::vector<LocalSearchFilter*>& GetOrCreateFeasibilityFilters();
+  
   DecisionBuilder* CreateSolutionFinalizer();
   void CreateFirstSolutionDecisionBuilders(
       const RoutingSearchParameters& search_parameters);
@@ -1245,7 +1246,7 @@ class RoutingModel {
   std::vector<IntVar*> nexts_;
   std::vector<IntVar*> vehicle_vars_;
   std::vector<IntVar*> active_;
-  SeedingCallback* gpSeeder_;
+  DecisionBuilder* gpSeeder_;
   LocalSearchOperator* lsoOperator_;
   
   //std::vector<int> lkhSequence_;
