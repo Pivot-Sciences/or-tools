@@ -220,6 +220,7 @@ class RoutingModel {
   typedef _RoutingModel_DisjunctionIndex DisjunctionIndex;
   typedef _RoutingModel_VehicleClassIndex VehicleClassIndex;
   typedef ResultCallback2<int64, NodeIndex, NodeIndex> NodeEvaluator2;
+  typedef ResultCallback3<int64, NodeIndex, NodeIndex, int> NodeEvaluator3;
   typedef std::function<int64(int64, int64)> TransitEvaluator2;
   typedef std::pair<int, int> NodePair;
   typedef std::vector<NodePair> NodePairs;
